@@ -18,6 +18,7 @@
         ::-webkit-scrollbar { display: none; }
         @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
         .animate-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+        .hide-scroll::-webkit-scrollbar { display: none; }
     </style>
 </head>
 <body>
@@ -27,6 +28,7 @@
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
+        // --- PASTE YOUR CONFIG HERE ---
         const firebaseConfig = {
             apiKey: "AIzaSyDPjIArz_knqjAnVpk9nLib-89sgE6yMPo",
             authDomain: "moryapos.firebaseapp.com",
@@ -36,22 +38,23 @@
             messagingSenderId: "736569569143",
             appId: "1:736569569143:web:3905b38d0aaecae77d7b72"
         };
+        // -----------------------------
 
         try {
             const app = initializeApp(firebaseConfig);
             const db = getDatabase(app);
             window.db = db; window.dbRef = ref; window.dbSet = set; window.dbOnValue = onValue;
             window.dispatchEvent(new Event('firebase-ready'));
-        } catch (e) { console.error(e); }
+        } catch (e) { console.error("Firebase Error:", e); }
     </script>
 
     <script type="text/babel">
-        const { useState, useEffect, useRef } = React;
+        const { useState, useEffect, useRef, useMemo } = React;
         const { jsPDF } = window.jspdf;
 
         // --- Config ---
         const ADMIN_PIN = "028987"; 
-        const SHOP = { name: "Morya Matching Centre", prop: "Prof. Kapil Shinde", mobile: "7083522162", address: "Nehru Nagar, Dhule" };
+        const SHOP = { name: "Morya Matching Centre", prop: "Prof. Kapil Shinde", mobile: "7083522162", address: "Near R.K Chitale Madhyamik, Nehru Nagar, Mochi Wada, Dhule" };
         
         // --- Components ---
         const Icon = ({ name, size = 20 }) => {
@@ -78,21 +81,28 @@
             const [view, setView] = useState("loading");
             const [user, setUser] = useState(null);
             const [ready, setReady] = useState(false);
+            
+            // Data
             const [inv, setInv] = useState([]);
             const [txs, setTxs] = useState([]);
             
-            // UI State
+            // UI
             const [tab, setTab] = useState('pos');
             const [cart, setCart] = useState([]);
             const [search, setSearch] = useState('');
-            const [activeModal, setActiveModal] = useState(null); 
+            const [activeModal, setActiveModal] = useState(null);
+            
+            // Edit/Selection
             const [selItem, setSelItem] = useState(null); 
             const [selColor, setSelColor] = useState(''); 
-            const [custData, setCustData] = useState({ name: '', mobile: '' });
-            const [lastBill, setLastBill] = useState(null);
             const colorInputRef = useRef(null);
 
-            // Init
+            // Checkout & Autocomplete
+            const [custData, setCustData] = useState({ name: '', mobile: '' });
+            const [suggestions, setSuggestions] = useState([]);
+            const [lastBill, setLastBill] = useState(null);
+
+            // 1. Init
             useEffect(() => {
                 const start = () => setReady(true);
                 if (window.db) start();
@@ -106,11 +116,19 @@
                 return () => window.removeEventListener('firebase-ready', start);
             }, []);
 
-            // Sync
+            // 2. Sync Firebase
             useEffect(() => {
                 if (!ready) return;
-                window.dbOnValue(window.dbRef(window.db, 'inventory'), (s) => setInv(s.val() ? Object.values(s.val()) : []));
-                window.dbOnValue(window.dbRef(window.db, 'transactions'), (s) => setTxs(s.val() ? Object.values(s.val()) : []));
+                // Inventory Listener
+                window.dbOnValue(window.dbRef(window.db, 'inventory'), (s) => {
+                    const data = s.val();
+                    setInv(data ? Object.values(data) : []);
+                });
+                // History Listener
+                window.dbOnValue(window.dbRef(window.db, 'transactions'), (s) => {
+                    const data = s.val();
+                    setTxs(data ? Object.values(data) : []);
+                });
             }, [ready]);
 
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [view, tab, cart, activeModal, inv]);
@@ -134,14 +152,22 @@
 
             const logout = () => { localStorage.removeItem('morya_session'); setUser(null); setView('auth'); };
 
-            const saveItemToCloud = (item) => {
-                const id = item.id || Date.now().toString();
-                const newItem = { ...item, id, price: parseInt(item.price), stock: parseInt(item.stock), colorStock: item.type === 'has_colors' ? (item.colorStock || {}) : {} };
-                window.dbSet(window.dbRef(window.db, 'inventory/' + id), newItem);
-                setActiveModal(null);
+            // FIXED: Inventory Save
+            const saveItemToCloud = () => {
+                if(!selItem.name || !selItem.price) return alert("Name and Price required");
+                const id = selItem.id || Date.now().toString();
+                const newItem = { 
+                    ...selItem, 
+                    id, 
+                    price: parseInt(selItem.price), 
+                    stock: parseInt(selItem.stock) || 0,
+                    colorStock: selItem.type === 'has_colors' ? (selItem.colorStock || {}) : {} 
+                };
+                window.dbSet(window.dbRef(window.db, 'inventory/' + id), newItem)
+                    .then(() => { setActiveModal(null); setSelItem(null); })
+                    .catch(e => alert("Error saving: " + e.message));
             };
 
-            // FIX: Functional update for proper incrementing
             const addToCart = (item, qty = 1, color = null, isCustom = false) => {
                 const cartId = item.id + (color ? `-${color}` : '');
                 setCart(prev => {
@@ -155,12 +181,41 @@
                 setActiveModal(null); setSelColor('');
             };
 
+            // AUTOCOMPLETE LOGIC
+            const handleCustInput = (field, value) => {
+                setCustData(prev => ({ ...prev, [field]: value }));
+                
+                if (value.length > 1) {
+                    // Extract unique customers from transaction history
+                    const uniqueCusts = [];
+                    const seen = new Set();
+                    txs.forEach(t => {
+                        if (!seen.has(t.customerMobile)) {
+                            seen.add(t.customerMobile);
+                            uniqueCusts.push({ name: t.customerName, mobile: t.customerMobile });
+                        }
+                    });
+
+                    const matches = uniqueCusts.filter(c => 
+                        c.name.toLowerCase().includes(value.toLowerCase()) || 
+                        c.mobile.includes(value)
+                    );
+                    setSuggestions(matches.slice(0, 5)); // Show top 5
+                } else {
+                    setSuggestions([]);
+                }
+            };
+
+            const selectSuggestion = (c) => {
+                setCustData({ name: c.name, mobile: c.mobile });
+                setSuggestions([]);
+            };
+
             const processPayment = () => {
                 if (!custData.name || !custData.mobile) return alert("Enter Customer Details");
                 const billId = Date.now().toString();
                 const total = cart.reduce((s, i) => s + (i.price * i.qty), 0);
                 
-                // Update Stock (Skip custom items)
                 inv.forEach(p => {
                     const soldItems = cart.filter(c => c.id === p.id && !c.isCustom);
                     if (soldItems.length > 0) {
@@ -179,27 +234,48 @@
                 setLastBill(bill); setCart([]); setActiveModal("receipt");
             };
 
+            // PROFESSIONAL PDF (From your file)
             const generatePDF = (b) => {
                 const d = new jsPDF({ unit: 'mm', format: [80, 200] }); 
                 d.setFontSize(10); d.setFont("helvetica", "bold"); d.text("MORYA MATCHING", 40, 8, { align: 'center' });
                 d.setFontSize(8); d.setFont("helvetica", "normal"); d.text(SHOP.prop, 40, 12, { align: 'center' }); 
                 d.text(SHOP.mobile, 40, 16, { align: 'center' }); 
-                let y = 25; 
+                d.text(d.splitTextToSize(SHOP.address, 75), 40, 20, { align: 'center' });
+                
+                let y = 35; 
                 d.text(`#${b.id.slice(-6)}`, 5, y); d.text(new Date(b.date).toLocaleDateString(), 75, y, { align: 'right' }); y += 5; 
                 d.text(`Cust: ${b.customerName}`, 5, y); y += 5;
-                d.line(5, y, 75, y); y += 5;
+                d.text("-------------------------------------------", 40, y, { align: 'center' }); y += 5;
+                
                 b.items.forEach(i => {
                     let n = i.name + (i.variant !== 'Std' ? ` (${i.variant})` : ''); 
                     d.text(n, 5, y); d.text(String(i.qty), 55, y, { align: 'right' }); d.text(String(i.price * i.qty), 75, y, { align: 'right' }); y += 5;
                 });
-                d.line(5, y, 75, y); y += 5; 
+                
+                y += 2; d.text("-------------------------------------------", 40, y, { align: 'center' }); y += 5; 
                 d.setFontSize(12); d.setFont("helvetica", "bold"); d.text(`TOTAL: ${b.total}`, 75, y, { align: 'right' }); 
                 d.save(`Bill_${b.id.slice(-6)}.pdf`);
             };
 
+            // TEXT PRINT INTENT (For RawBT/Thermal)
+            const printText = (b) => {
+                let text = `*MORYA MATCHING*\n${SHOP.address}\n\nBill: #${b.id.slice(-6)}\nDate: ${new Date(b.date).toLocaleDateString()}\nCust: ${b.customerName}\n----------------\n`;
+                b.items.forEach(i => { text += `${i.name} x${i.qty} = ${i.price * i.qty}\n`; });
+                text += `----------------\nTOTAL: ${b.total}\n\nThank You!\n\n\n`; // Extra lines for paper cut
+                
+                // Share as text (RawBT catches this)
+                if(navigator.share) {
+                    navigator.share({ title: 'Print Receipt', text: text }).catch(console.error);
+                } else {
+                    // Fallback to simple copy
+                    navigator.clipboard.writeText(text);
+                    alert("Receipt copied! Open RawBT or Printer app and paste.");
+                }
+            };
+
             // --- Views ---
 
-            if (view === "loading") return <div className="h-screen flex items-center justify-center text-blue-600 font-bold">Starting Morya POS...</div>;
+            if (view === "loading") return <div className="h-screen flex items-center justify-center text-blue-600 font-bold">Connecting Cloud...</div>;
 
             if (view === "auth") return (
                 <div className="h-screen bg-blue-600 flex items-center justify-center p-6">
@@ -217,35 +293,19 @@
             if (view === "customer") return (
                 <div className="min-h-screen bg-gray-50 flex flex-col">
                     <div className="bg-blue-600 p-6 text-white rounded-b-3xl shadow-lg mb-4 flex justify-between items-center">
-                        <div><h1 className="text-2xl font-bold">Morya Matching</h1><p className="opacity-80 text-sm">Welcome, Customer</p></div>
+                        <div><h1 className="text-2xl font-bold">Morya Matching</h1><p className="opacity-80 text-sm">Welcome</p></div>
                         <button onClick={logout} className="bg-blue-700 px-3 py-1 rounded text-xs">Logout</button>
                     </div>
-                    
-                    <div className="flex px-4 gap-2 mb-4">
-                        <button onClick={()=>setTab('orders')} className={`flex-1 py-2 rounded-lg font-bold ${tab==='orders'?'bg-blue-600 text-white':'bg-white text-gray-600'}`}>My Orders</button>
-                        <button onClick={()=>setTab('catalog')} className={`flex-1 py-2 rounded-lg font-bold ${tab==='catalog'?'bg-blue-600 text-white':'bg-white text-gray-600'}`}>Shop Items</button>
-                    </div>
-
                     <div className="flex-1 px-4 pb-4 overflow-y-auto">
-                        {tab === 'orders' ? (
-                            txs.filter(t => t.customerMobile === user.mobile).length === 0 ? <p className="text-center text-gray-400 mt-10">No orders yet.</p> :
-                            txs.filter(t => t.customerMobile === user.mobile).slice().reverse().map(t => (
-                                <Card key={t.id} className="mb-3">
-                                    <div className="flex justify-between font-bold border-b pb-2 mb-2"><span>{new Date(t.date).toLocaleDateString()}</span><span className="text-green-600">₹{t.total}</span></div>
-                                    {t.items.map((i, idx) => <div key={idx} className="flex justify-between text-sm text-gray-600"><span>{i.name} x{i.qty}</span><span>{i.price * i.qty}</span></div>)}
-                                    <Btn variant="secondary" className="w-full mt-3 py-2 text-xs" onClick={() => generatePDF(t)}><Icon name="download" size={14}/> PDF Bill</Btn>
-                                </Card>
-                            ))
-                        ) : (
-                            <div className="space-y-3">
-                                {inv.map(p => (
-                                    <Card key={p.id} className="flex justify-between items-center">
-                                        <div><div className="font-bold">{p.name}</div><div className="text-xs text-gray-500">{p.variant}</div></div>
-                                        <div className="font-bold text-blue-600">₹{p.price}</div>
-                                    </Card>
-                                ))}
-                            </div>
-                        )}
+                        <h3 className="font-bold text-gray-800 mb-3">Your Orders</h3>
+                        {txs.filter(t => t.customerMobile === user.mobile).length === 0 ? <p className="text-center text-gray-400 mt-10">No orders yet.</p> :
+                        txs.filter(t => t.customerMobile === user.mobile).slice().reverse().map(t => (
+                            <Card key={t.id} className="mb-3">
+                                <div className="flex justify-between font-bold border-b pb-2 mb-2"><span>{new Date(t.date).toLocaleDateString()}</span><span className="text-green-600">₹{t.total}</span></div>
+                                {t.items.map((i, idx) => <div key={idx} className="flex justify-between text-sm text-gray-600"><span>{i.name} x{i.qty}</span><span>{i.price * i.qty}</span></div>)}
+                                <Btn variant="secondary" className="w-full mt-3 py-2 text-xs" onClick={() => generatePDF(t)}><Icon name="download" size={14}/> PDF Bill</Btn>
+                            </Card>
+                        ))}
                     </div>
                 </div>
             );
@@ -263,7 +323,7 @@
                     <div className="flex-1 overflow-y-auto p-4 pb-48">
                         {tab === 'pos' && (
                             <div className="space-y-3">
-                                <Btn onClick={()=>setActiveModal('quick')} variant="purple" className="w-full mb-2"><Icon name="zap"/> Quick Sell (Custom Item)</Btn>
+                                <Btn onClick={()=>setActiveModal('quick')} variant="purple" className="w-full mb-2"><Icon name="zap"/> Quick Sell</Btn>
                                 <input className="w-full p-3 rounded-xl border bg-white" placeholder="Search Inventory..." value={search} onChange={e => setSearch(e.target.value)} />
                                 {inv.filter(p => p.name.toLowerCase().includes(search.toLowerCase())).map(p => (
                                     <Card key={p.id} className="flex justify-between items-center active:scale-[0.99]">
@@ -312,7 +372,7 @@
 
                     {cart.length > 0 && tab === 'pos' && (
                         <div onClick={() => setActiveModal('checkout')} className="fixed bottom-24 left-4 right-4 bg-gray-900 text-white p-4 rounded-2xl shadow-2xl flex justify-between items-center z-40 animate-up cursor-pointer">
-                            <div className="flex items-center gap-3"><span className="bg-gray-700 px-3 py-1 rounded-lg font-bold">{cart.reduce((s, i) => s + (i.price * i.qty), 0)}</span></div>
+                            <div className="flex items-center gap-3"><span className="bg-gray-700 px-3 py-1 rounded-lg font-bold">{cart.reduce((s, i) => s + i.qty, 0)}</span><span className="font-bold text-xl">₹{cart.reduce((s, i) => s + (i.price * i.qty), 0)}</span></div>
                             <div className="flex items-center gap-2 font-bold text-blue-300">Checkout <Icon name="arrow-right"/></div>
                         </div>
                     )}
@@ -364,9 +424,21 @@
                                         </div>
                                     ))}
                                 </div>
-                                <div className="space-y-3 pt-4 border-t">
-                                    <input className="w-full p-3 bg-gray-50 rounded-xl" placeholder="Customer Name" value={custData.name} onChange={e => setCustData({...custData, name: e.target.value})}/>
-                                    <input type="tel" className="w-full p-3 bg-gray-50 rounded-xl" placeholder="Mobile Number" value={custData.mobile} onChange={e => setCustData({...custData, mobile: e.target.value})}/>
+                                <div className="space-y-3 pt-4 border-t relative">
+                                    {/* AUTOCOMPLETE DROPDOWN */}
+                                    <div className="relative">
+                                        <input className="w-full p-3 bg-gray-50 rounded-xl mb-2" placeholder="Customer Name (Type to search)" value={custData.name} onChange={e => handleCustInput('name', e.target.value)}/>
+                                        {suggestions.length > 0 && (
+                                            <div className="absolute bottom-full left-0 w-full bg-white shadow-xl border rounded-xl mb-2 z-50 overflow-hidden">
+                                                {suggestions.map((s, idx) => (
+                                                    <div key={idx} onClick={() => selectSuggestion(s)} className="p-3 border-b hover:bg-blue-50 flex justify-between items-center cursor-pointer">
+                                                        <span className="font-bold">{s.name}</span><span className="text-xs text-gray-500">{s.mobile}</span>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                    <input type="tel" className="w-full p-3 bg-gray-50 rounded-xl" placeholder="Mobile Number" value={custData.mobile} onChange={e => handleCustInput('mobile', e.target.value)}/>
                                     <Btn variant="black" className="w-full py-4 text-lg" onClick={processPayment}>CONFIRM PAYMENT</Btn>
                                 </div>
                             </div>
@@ -380,6 +452,7 @@
                                 <h2 className="text-2xl font-bold mb-1">Payment Done!</h2><p className="text-gray-500 mb-6 font-mono text-lg">₹{lastBill.total}</p>
                                 <div className="space-y-3">
                                     <Btn variant="black" className="w-full py-4" onClick={() => generatePDF(lastBill)}><Icon name="file-text"/> Download PDF</Btn>
+                                    <Btn variant="secondary" className="w-full py-4" onClick={() => printText(lastBill)}><Icon name="printer"/> Text Print (RawBT)</Btn>
                                     <Btn variant="green" className="w-full py-4" onClick={() => window.open(`https://wa.me/91${lastBill.customerMobile}?text=${encodeURIComponent(`*MORYA POS*\nBill #${lastBill.id.slice(-6)}\nAmount: ₹${lastBill.total}`)}`, '_blank')}><Icon name="message-circle"/> WhatsApp</Btn>
                                 </div>
                                 <button onClick={() => setActiveModal(null)} className="mt-6 text-gray-400 text-sm underline">Close</button>
@@ -396,7 +469,7 @@
                                     <input className="w-full p-3 border rounded-lg" placeholder="Name" value={selItem.name} onChange={e => setSelItem({...selItem, name: e.target.value})}/>
                                     <input className="w-full p-3 border rounded-lg" placeholder="Variant" value={selItem.variant} onChange={e => setSelItem({...selItem, variant: e.target.value})}/>
                                     <div className="flex gap-2"><input type="number" className="w-full p-3 border rounded-lg" placeholder="Price" value={selItem.price} onChange={e => setSelItem({...selItem, price: e.target.value})}/><input type="number" className="w-full p-3 border rounded-lg" placeholder="Stock" value={selItem.stock} onChange={e => setSelItem({...selItem, stock: e.target.value})}/></div>
-                                    <Btn onClick={() => saveItemToCloud(selItem)} className="w-full mt-2">Save</Btn>
+                                    <Btn onClick={saveItemToCloud} className="w-full mt-2">Save</Btn>
                                     <button onClick={() => setActiveModal(null)} className="w-full py-3 text-gray-400">Cancel</button>
                                 </div>
                             </div>
@@ -412,7 +485,9 @@
                                     <Btn onClick={() => {
                                         const c = document.getElementById('sc').value, q = document.getElementById('sq').value;
                                         if(!c || !q) return;
-                                        saveItemToCloud({ ...selItem, stock: selItem.stock + parseInt(q), colorStock: { ...(selItem.colorStock||{}), [c]: (selItem.colorStock?.[c]||0) + parseInt(q) } });
+                                        const newItem = { ...selItem, stock: parseInt(selItem.stock) + parseInt(q), colorStock: { ...(selItem.colorStock||{}), [c]: (selItem.colorStock?.[c]||0) + parseInt(q) } };
+                                        setSelItem(newItem); // Optimistic UI
+                                        window.dbSet(window.dbRef(window.db, 'inventory/' + selItem.id), newItem);
                                         document.getElementById('sc').value = ''; document.getElementById('sq').value = '';
                                     }} className="text-xs">Add</Btn>
                                 </div>
