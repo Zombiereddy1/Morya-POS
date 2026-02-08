@@ -11,46 +11,30 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 
     <style>
         body { background: #f3f4f6; -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; font-family: sans-serif; }
         ::-webkit-scrollbar { display: none; }
         .animate-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
         @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
-        .hide-scroll::-webkit-scrollbar { display: none; }
+        .loader { border: 4px solid #f3f3f3; border-top: 4px solid #3498db; border-radius: 50%; width: 40px; height: 40px; animation: spin 1s linear infinite; }
+        @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
 <body>
     <div id="root"></div>
 
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
-        import { getDatabase, ref, set, onValue, get } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
-
-        // --- FIREBASE CONFIG ---
-        const firebaseConfig = {
-            apiKey: "AIzaSyDPjIArz_knqjAnVpk9nLib-89sgE6yMPo",
-            authDomain: "moryapos.firebaseapp.com",
-            databaseURL: "https://moryapos-default-rtdb.firebaseio.com",
-            projectId: "moryapos",
-            storageBucket: "moryapos.firebasestorage.app",
-            messagingSenderId: "736569569143",
-            appId: "1:736569569143:web:3905b38d0aaecae77d7b72"
+    <script>
+        window.onerror = function(msg, url, line) {
+            document.body.innerHTML = `<div style="padding:20px;color:red;font-family:sans-serif"><h3>App Crashed</h3><p>${msg}</p><p>Line: ${line}</p></div>`;
         };
-        // -----------------------
-
-        try {
-            const app = initializeApp(firebaseConfig);
-            const db = getDatabase(app);
-            window.db = db; window.dbRef = ref; window.dbSet = set; window.dbOnValue = onValue; window.dbGet = get;
-            window.dispatchEvent(new Event('firebase-ready'));
-        } catch (e) { console.error("Firebase Error:", e); }
     </script>
 
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
-        const { jsPDF } = window.jspdf;
 
         // --- Defaults ---
         const ADMIN_PIN = "028987"; 
@@ -62,13 +46,13 @@
             mobile: "7083522162", 
             email: "kapil@example.com",
             address: "Near R.K Chitale Madhyamik, Nehru Nagar, Mochi Wada, Dhule",
-            status: "OPEN" // OPEN or CLOSED
+            status: "OPEN" 
         };
 
         // --- Components ---
         const Icon = ({ name, size = 20 }) => {
-            useEffect(() => window.lucide?.createIcons(), [name]);
-            return <i data-lucide={name.replace(/([A-Z])/g,'-$1').toLowerCase()} width={size} height={size}></i>;
+            useEffect(() => { if(window.lucide) window.lucide.createIcons(); }, [name]);
+            return <i data-lucide={name} style={{width:size, height:size}}></i>;
         };
         const Btn = ({ children, onClick, variant = "primary", className = "", ...props }) => {
             const variants = {
@@ -87,64 +71,77 @@
 
         // --- Main App ---
         const App = () => {
-            const [view, setView] = useState("loading"); // loading, website, customer_login, customer_dash, admin_login, admin_dash
+            // App State
+            const [view, setView] = useState("boot"); // boot, setup, website, customer_login, customer_dash, admin_login, admin_dash
+            const [db, setDb] = useState(null);
             const [user, setUser] = useState(null);
-            const [ready, setReady] = useState(false);
             
             // Data
             const [inv, setInv] = useState([]);
             const [txs, setTxs] = useState([]);
             const [shopInfo, setShopInfo] = useState(DEFAULT_SHOP);
             
-            // UI State
-            const [tab, setTab] = useState('pos'); // pos, inventory, history, settings
+            // UI
+            const [tab, setTab] = useState('pos');
             const [cart, setCart] = useState([]);
             const [search, setSearch] = useState('');
             const [catFilter, setCatFilter] = useState('All');
             const [activeModal, setActiveModal] = useState(null);
-            
-            // Operational
             const [selItem, setSelItem] = useState(null); 
             const [selColor, setSelColor] = useState(''); 
-            const colorInputRef = useRef(null);
             const [custData, setCustData] = useState({ name: '', mobile: '' });
             const [suggestions, setSuggestions] = useState([]);
             const [lastBill, setLastBill] = useState(null);
+            const colorInputRef = useRef(null);
 
-            // Init
+            // 1. BOOTSTRAP SYSTEM
             useEffect(() => {
-                const start = () => setReady(true);
-                if (window.db) start();
-                else window.addEventListener('firebase-ready', start);
-                return () => window.removeEventListener('firebase-ready', start);
+                const storedConfig = localStorage.getItem('morya_firebase_config');
+                if (storedConfig) {
+                    try {
+                        const config = JSON.parse(storedConfig);
+                        if (!firebase.apps.length) firebase.initializeApp(config);
+                        const database = firebase.database();
+                        setDb(database);
+                        checkSession(database);
+                    } catch (e) {
+                        alert("Config Error. Resetting.");
+                        localStorage.removeItem('morya_firebase_config');
+                        setView("setup");
+                    }
+                } else {
+                    setView("setup");
+                }
             }, []);
 
-            // Sync Data
-            useEffect(() => {
-                if (!ready) return;
-                // Inventory
-                window.dbOnValue(window.dbRef(window.db, 'inventory'), (s) => setInv(s.val() ? Object.values(s.val()) : []));
-                // Transactions
-                window.dbOnValue(window.dbRef(window.db, 'transactions'), (s) => setTxs(s.val() ? Object.values(s.val()) : []));
-                // Shop Settings
-                window.dbOnValue(window.dbRef(window.db, 'settings'), (s) => {
-                    if(s.val()) setShopInfo(s.val());
-                    else window.dbSet(window.dbRef(window.db, 'settings'), DEFAULT_SHOP);
-                });
-                
-                // Check Session
+            const checkSession = (database) => {
                 const session = localStorage.getItem('morya_session');
+                // Start Listeners
+                database.ref('inventory').on('value', s => setInv(s.val() ? Object.values(s.val()) : []));
+                database.ref('transactions').on('value', s => setTxs(s.val() ? Object.values(s.val()) : []));
+                database.ref('settings').on('value', s => s.val() ? setShopInfo(s.val()) : null);
+
                 if (session) {
                     const s = JSON.parse(session);
                     setUser(s); setView(s.role === 'admin' ? 'admin_dash' : 'customer_dash');
                 } else {
-                    setView("website"); // Default to Website View
+                    setView("website");
                 }
-            }, [ready]);
+            };
 
+            const saveConfig = () => {
+                const input = document.getElementById('configInput').value;
+                try {
+                    const config = JSON.parse(input);
+                    localStorage.setItem('morya_firebase_config', JSON.stringify(config));
+                    window.location.reload();
+                } catch(e) { alert("Invalid JSON"); }
+            };
+
+            // 2. ICONS REFRESH
             useEffect(() => { if (window.lucide) window.lucide.createIcons(); }, [view, tab, cart, activeModal, inv, shopInfo]);
 
-            // --- Authentication Logic ---
+            // --- Logic ---
 
             const handleAdminLogin = () => {
                 const pin = prompt("Enter Admin PIN:");
@@ -155,41 +152,29 @@
                 } else alert("Wrong PIN");
             };
 
-            const handleCustomerLogin = async (mobile, password) => {
+            const handleCustomerLogin = (mobile, password) => {
                 if (!mobile || !password) return alert("Fill details");
-                // Check user password in Firebase
-                const userRef = window.dbRef(window.db, `users/${mobile}`);
-                window.dbGet(userRef).then((snapshot) => {
-                    const userData = snapshot.val();
-                    const correctPass = userData ? userData.password : "ADMIN"; // Default Password
-                    
+                db.ref(`users/${mobile}`).once('value').then(s => {
+                    const userData = s.val();
+                    const correctPass = userData ? userData.password : "ADMIN";
                     if (password === correctPass) {
                         const u = { mobile, role: 'customer' };
                         setUser(u); setView('customer_dash');
                         localStorage.setItem('morya_session', JSON.stringify(u));
-                    } else {
-                        alert("Wrong Password. Default is ADMIN");
-                    }
+                    } else alert("Wrong Password. Default is ADMIN");
                 });
             };
 
             const changeCustomerPassword = (newPass) => {
-                window.dbSet(window.dbRef(window.db, `users/${user.mobile}`), { password: newPass });
-                alert("Password Changed Successfully!");
-                setActiveModal(null);
+                db.ref(`users/${user.mobile}`).set({ password: newPass });
+                alert("Password Updated!");
             };
 
             const logout = () => { localStorage.removeItem('morya_session'); setUser(null); setView('website'); };
 
-            // --- Admin Logic ---
-            
-            const updateShopSettings = (newSettings) => {
-                window.dbSet(window.dbRef(window.db, 'settings'), newSettings);
-                alert("Shop Settings Updated!");
-            };
-
+            // Admin Actions
             const saveItemToCloud = () => {
-                if(!selItem.name || !selItem.price) return alert("Required fields missing");
+                if(!selItem.name || !selItem.price) return alert("Fields missing");
                 const id = selItem.id || Date.now().toString();
                 const newItem = { 
                     ...selItem, id, 
@@ -197,10 +182,10 @@
                     category: selItem.category || "Other",
                     colorStock: selItem.type === 'has_colors' ? (selItem.colorStock || {}) : {} 
                 };
-                window.dbSet(window.dbRef(window.db, 'inventory/' + id), newItem).then(() => setActiveModal(null));
+                db.ref('inventory/' + id).set(newItem).then(() => setActiveModal(null));
             };
 
-            // --- POS & Cart Logic ---
+            // POS
             const addToCart = (item, qty = 1, color = null, isCustom = false) => {
                 const cartId = item.id + (color ? `-${color}` : '');
                 setCart(prev => {
@@ -224,16 +209,16 @@
                             ns -= c.qty;
                             if (p.type === 'has_colors' && c.colorNumber) ncs[c.colorNumber] = (ncs[c.colorNumber] || 0) - c.qty;
                         });
-                        window.dbSet(window.dbRef(window.db, 'inventory/' + p.id), { ...p, stock: ns, colorStock: ncs });
+                        db.ref('inventory/' + p.id).update({ stock: ns, colorStock: ncs });
                     }
                 });
 
                 const bill = { id: billId, date: new Date().toISOString(), customerName: custData.name, customerMobile: custData.mobile, items: cart, total: total };
-                window.dbSet(window.dbRef(window.db, 'transactions/' + billId), bill);
+                db.ref('transactions/' + billId).set(bill);
                 setLastBill(bill); setCart([]); setActiveModal("receipt");
             };
 
-            // --- Receipt Text ---
+            // Receipt Text
             const getReceiptText = (b) => {
                 let t = `   *${shopInfo.name}*\n   ${shopInfo.prop}\n   ${shopInfo.mobile}\n   ${shopInfo.address}\n`;
                 t += `--------------------------------\nBill: ${b.id.slice(-6)}\nDate: ${new Date(b.date).toLocaleDateString()}\nCust: ${b.customerName}\n--------------------------------\n`;
@@ -242,79 +227,73 @@
                 return t;
             };
 
-            const printReceipt = (b) => {
-                if (navigator.share) navigator.share({ title: 'Receipt', text: getReceiptText(b) });
-                else { navigator.clipboard.writeText(getReceiptText(b)); alert("Copied to clipboard"); }
+            // Autocomplete
+            const handleCustInput = (val) => {
+                setCustData(prev => ({ ...prev, name: val }));
+                if (val.length > 1) {
+                    const unique = []; const seen = new Set();
+                    txs.forEach(t => { if(t.customerMobile && !seen.has(t.customerMobile)) { seen.add(t.customerMobile); unique.push({name:t.customerName, mobile:t.customerMobile}); } });
+                    setSuggestions(unique.filter(c => c.name.toLowerCase().includes(val.toLowerCase())).slice(0,5));
+                } else setSuggestions([]);
             };
 
             // --- Views ---
 
-            if (view === "loading") return <div className="h-screen flex items-center justify-center text-blue-600 font-bold">Loading Store...</div>;
+            if (view === "boot") return <div className="h-screen flex items-center justify-center flex-col"><div className="loader mb-4"></div><div className="text-blue-600 font-bold">Starting System...</div></div>;
 
-            // 1. PUBLIC WEBSITE VIEW
+            if (view === "setup") return (
+                <div className="h-screen bg-gray-900 flex items-center justify-center p-6">
+                    <Card className="w-full max-w-md">
+                        <h2 className="text-xl font-bold mb-4">System Setup</h2>
+                        <p className="text-sm text-gray-500 mb-4">Paste your Firebase Config JSON here to connect the database.</p>
+                        <textarea id="configInput" className="w-full h-40 p-3 border rounded-lg text-xs font-mono bg-gray-50 mb-4" placeholder='{ "apiKey": "..." }'></textarea>
+                        <Btn onClick={saveConfig} className="w-full">Connect Database</Btn>
+                    </Card>
+                </div>
+            );
+
+            // WEBSITE VIEW
             if (view === "website") return (
                 <div className="min-h-screen bg-white flex flex-col">
-                    {/* Hero Section */}
                     <div className="bg-blue-600 text-white p-8 rounded-b-[3rem] shadow-xl text-center relative">
                         <div className="absolute top-4 right-4 bg-white/20 p-2 rounded-full cursor-pointer" onClick={() => setView("admin_login")}><Icon name="lock" size={16} className="text-white/50"/></div>
                         <h1 className="text-3xl font-extrabold mb-2">{shopInfo.name}</h1>
                         <p className="opacity-80 text-sm mb-4">{shopInfo.address}</p>
                         <div className={`inline-flex items-center gap-2 px-4 py-1 rounded-full text-xs font-bold ${shopInfo.status==='OPEN' ? 'bg-green-400 text-green-900' : 'bg-red-400 text-red-900'}`}>
-                            <div className={`w-2 h-2 rounded-full ${shopInfo.status==='OPEN' ? 'bg-green-700 animate-pulse' : 'bg-red-700'}`}></div>
-                            Currently {shopInfo.status}
+                            <div className={`w-2 h-2 rounded-full ${shopInfo.status==='OPEN' ? 'bg-green-700 animate-pulse' : 'bg-red-700'}`}></div>Currently {shopInfo.status}
                         </div>
                     </div>
-
-                    {/* Contact Info */}
                     <div className="p-6 grid grid-cols-2 gap-4 -mt-8">
                         <Card className="text-center shadow-lg"><Icon name="phone" className="mx-auto text-blue-600 mb-2"/><p className="text-xs font-bold">{shopInfo.mobile}</p></Card>
                         <Card className="text-center shadow-lg"><Icon name="mail" className="mx-auto text-blue-600 mb-2"/><p className="text-xs font-bold break-words">{shopInfo.email}</p></Card>
                     </div>
-
-                    {/* Actions */}
                     <div className="px-6 space-y-4">
-                        <Btn onClick={() => setView("customer_login")} className="w-full py-4 text-lg shadow-xl">
-                            <Icon name="user"/> Customer Login
-                        </Btn>
+                        <Btn onClick={() => setView("customer_login")} className="w-full py-4 text-lg shadow-xl"><Icon name="user"/> Customer Login</Btn>
                         <div className="text-center text-gray-400 text-xs">Login to view orders & history</div>
                     </div>
-
-                    {/* Catalog Preview */}
                     <div className="p-6">
                         <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><Icon name="shopping-bag"/> Latest Items</h3>
-                        <div className="space-y-3">
-                            {inv.slice(0, 5).map(p => (
-                                <div key={p.id} className="flex justify-between items-center border-b pb-2">
-                                    <div><div className="font-bold text-gray-700">{p.name}</div><div className="text-xs text-gray-400">{p.category}</div></div>
-                                    <div className="font-bold text-blue-600">₹{p.price}</div>
-                                </div>
-                            ))}
-                        </div>
+                        <div className="space-y-3">{inv.slice(0, 5).map(p => (<div key={p.id} className="flex justify-between items-center border-b pb-2"><div><div className="font-bold text-gray-700">{p.name}</div><div className="text-xs text-gray-400">{p.category}</div></div><div className="font-bold text-blue-600">₹{p.price}</div></div>))}</div>
                     </div>
                 </div>
             );
 
-            // 2. CUSTOMER LOGIN
+            // CUSTOMER LOGIN
             if (view === "customer_login") return (
                 <div className="h-screen bg-blue-50 flex items-center justify-center p-6">
                     <Card className="w-full max-w-sm text-center py-10 shadow-xl">
                         <h2 className="text-2xl font-bold text-blue-800 mb-2">Customer Login</h2>
-                        <p className="text-xs text-gray-500 mb-6">First time? Password is <span className="font-bold text-blue-600">ADMIN</span></p>
-                        
+                        <p className="text-xs text-gray-500 mb-6">Default Password: <span className="font-bold text-blue-600">ADMIN</span></p>
                         <input id="cMob" type="tel" placeholder="Mobile Number" className="w-full p-3 bg-gray-50 border rounded-xl mb-3"/>
                         <input id="cPass" type="password" placeholder="Password" className="w-full p-3 bg-gray-50 border rounded-xl mb-4"/>
-                        
                         <Btn onClick={() => handleCustomerLogin(document.getElementById('cMob').value, document.getElementById('cPass').value)} className="w-full mb-4">Login</Btn>
-                        
                         <button onClick={() => setView("website")} className="text-gray-400 text-sm">Back to Home</button>
-                        <div className="mt-6 pt-6 border-t">
-                            <button onClick={() => window.open(`https://wa.me/91${ADMIN_MOBILE}?text=Forgot Password for my account`, '_blank')} className="text-blue-500 text-xs underline">Forgot Password? (WhatsApp Admin)</button>
-                        </div>
+                        <div className="mt-6 pt-6 border-t"><button onClick={() => window.open(`https://wa.me/91${ADMIN_MOBILE}?text=Forgot Password`, '_blank')} className="text-blue-500 text-xs underline">Forgot Password? (WhatsApp)</button></div>
                     </Card>
                 </div>
             );
 
-            // 3. ADMIN LOGIN
+            // ADMIN LOGIN
             if (view === "admin_login") return (
                 <div className="h-screen bg-gray-900 flex items-center justify-center p-6">
                     <Card className="w-full max-w-sm text-center py-10">
@@ -326,19 +305,17 @@
                 </div>
             );
 
-            // 4. CUSTOMER DASHBOARD
+            // CUSTOMER DASH
             if (view === "customer_dash") return (
                 <div className="min-h-screen bg-gray-50 flex flex-col">
                     <div className="bg-blue-600 p-6 text-white rounded-b-3xl shadow-lg mb-4 flex justify-between items-center">
                         <div><h1 className="text-xl font-bold">{shopInfo.name}</h1><p className="opacity-80 text-xs">Hi, Customer</p></div>
                         <button onClick={logout} className="bg-blue-700 px-3 py-1 rounded text-xs">Logout</button>
                     </div>
-                    
                     <div className="flex px-4 gap-2 mb-4">
                         <button onClick={()=>setTab('orders')} className={`flex-1 py-2 rounded-lg font-bold ${tab==='orders'?'bg-blue-600 text-white':'bg-white text-gray-600'}`}>My Orders</button>
                         <button onClick={()=>setTab('settings')} className={`flex-1 py-2 rounded-lg font-bold ${tab==='settings'?'bg-blue-600 text-white':'bg-white text-gray-600'}`}>Settings</button>
                     </div>
-
                     <div className="flex-1 px-4 pb-4 overflow-y-auto">
                         {tab === 'orders' ? (
                             txs.filter(t => t.customerMobile === user.mobile).length === 0 ? <p className="text-center text-gray-400 mt-10">No orders yet.</p> :
@@ -346,21 +323,17 @@
                                 <Card key={t.id} className="mb-3">
                                     <div className="flex justify-between font-bold border-b pb-2 mb-2"><span>{new Date(t.date).toLocaleDateString()}</span><span className="text-green-600">₹{t.total}</span></div>
                                     <div className="text-sm text-gray-600 space-y-1">{t.items.map((i, idx) => <div key={idx}>{i.name} x{i.qty}</div>)}</div>
-                                    <Btn variant="secondary" className="w-full mt-3 py-2 text-xs" onClick={() => printReceipt(t)}><Icon name="share-2" size={14}/> Share Receipt</Btn>
+                                    <Btn variant="secondary" className="w-full mt-3 py-2 text-xs" onClick={() => { if(navigator.share) navigator.share({title:'Receipt', text:getReceiptText(t)}); else navigator.clipboard.writeText(getReceiptText(t)); }}><Icon name="share-2" size={14}/> Share Receipt</Btn>
                                 </Card>
                             ))
                         ) : (
-                            <Card>
-                                <h3 className="font-bold mb-4">Change Password</h3>
-                                <input id="newPass" type="password" placeholder="New Password" className="w-full p-3 border rounded-lg mb-4"/>
-                                <Btn onClick={() => changeCustomerPassword(document.getElementById('newPass').value)}>Update Password</Btn>
-                            </Card>
+                            <Card><h3 className="font-bold mb-4">Change Password</h3><input id="newPass" type="password" placeholder="New Password" className="w-full p-3 border rounded-lg mb-4"/><Btn onClick={() => changeCustomerPassword(document.getElementById('newPass').value)}>Update</Btn></Card>
                         )}
                     </div>
                 </div>
             );
 
-            // 5. ADMIN DASHBOARD
+            // ADMIN DASH
             if (view === "admin_dash") return (
                 <div className="flex flex-col h-screen w-full bg-gray-50 text-gray-900 font-sans">
                     <div className="bg-white p-4 shadow-sm z-30 sticky top-0 flex justify-between items-center">
@@ -370,100 +343,47 @@
                             <button onClick={logout} className="p-2 bg-gray-100 rounded-full"><Icon name="log-out"/></button>
                         </div>
                     </div>
-
                     <div className="flex-1 overflow-y-auto p-4 pb-48">
-                        {/* POS Tab */}
                         {tab === 'pos' && (
                             <div className="space-y-3">
                                 <Btn onClick={()=>setActiveModal('quick')} variant="purple" className="w-full mb-2"><Icon name="zap"/> Quick Sell</Btn>
                                 <input className="w-full p-3 rounded-xl border bg-white" placeholder="Search Inventory..." value={search} onChange={e => setSearch(e.target.value)} />
                                 <div className="flex gap-2 overflow-x-auto pb-2 hide-scroll">{CATEGORIES.map(c => <button key={c} onClick={()=>setCatFilter(c)} className={`px-4 py-1 rounded-full text-xs font-bold whitespace-nowrap ${catFilter===c ? 'bg-blue-600 text-white' : 'bg-gray-200 text-gray-700'}`}>{c}</button>)}</div>
                                 {inv.filter(p => p.name.toLowerCase().includes(search.toLowerCase()) && (catFilter==='All' || p.category === catFilter)).map(p => (
-                                    <Card key={p.id} className="flex justify-between items-center active:scale-[0.99]">
-                                        <div onClick={() => { if(p.type === 'has_colors') { setSelItem(p); setActiveModal('color'); setTimeout(()=>colorInputRef.current?.focus(), 100); } else addToCart(p); }} className="flex-1">
-                                            <div className="font-bold text-lg">{p.name}</div><div className="text-xs text-gray-400">Stock: {p.stock} | {p.category}</div>
-                                        </div>
-                                        <div className="flex flex-col items-end gap-1"><span className="font-bold text-xl text-blue-700">₹{p.price}</span><Btn onClick={() => { if(p.type === 'has_colors') { setSelItem(p); setActiveModal('color'); } else addToCart(p); }} className="py-1 px-4 text-xs h-8">Add</Btn></div>
-                                    </Card>
+                                    <Card key={p.id} className="flex justify-between items-center active:scale-[0.99]"><div onClick={() => { if(p.type === 'has_colors') { setSelItem(p); setActiveModal('color'); setTimeout(()=>colorInputRef.current?.focus(), 100); } else addToCart(p); }} className="flex-1"><div className="font-bold text-lg">{p.name}</div><div className="text-xs text-gray-400">Stock: {p.stock} | {p.category}</div></div><div className="flex flex-col items-end gap-1"><span className="font-bold text-xl text-blue-700">₹{p.price}</span><Btn onClick={() => { if(p.type === 'has_colors') { setSelItem(p); setActiveModal('color'); } else addToCart(p); }} className="py-1 px-4 text-xs h-8">Add</Btn></div></Card>
                                 ))}
                             </div>
                         )}
-
-                        {/* Settings Tab */}
                         {tab === 'settings' && (
                             <div className="space-y-4">
-                                <Card>
-                                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Icon name="store"/> Shop Status</h3>
-                                    <div className="flex gap-2">
-                                        <Btn onClick={() => updateShopSettings({...shopInfo, status: 'OPEN'})} variant={shopInfo.status==='OPEN'?'green':'secondary'} className="flex-1">OPEN</Btn>
-                                        <Btn onClick={() => updateShopSettings({...shopInfo, status: 'CLOSED'})} variant={shopInfo.status==='CLOSED'?'danger':'secondary'} className="flex-1">CLOSED</Btn>
-                                    </div>
-                                </Card>
-                                <Card>
-                                    <h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Icon name="edit"/> Shop Details</h3>
-                                    <div className="space-y-3">
-                                        <input className="w-full p-3 border rounded-lg" value={shopInfo.name} onChange={e => setShopInfo({...shopInfo, name: e.target.value})} placeholder="Shop Name"/>
-                                        <input className="w-full p-3 border rounded-lg" value={shopInfo.address} onChange={e => setShopInfo({...shopInfo, address: e.target.value})} placeholder="Address"/>
-                                        <input className="w-full p-3 border rounded-lg" value={shopInfo.mobile} onChange={e => setShopInfo({...shopInfo, mobile: e.target.value})} placeholder="Mobile"/>
-                                        <input className="w-full p-3 border rounded-lg" value={shopInfo.email} onChange={e => setShopInfo({...shopInfo, email: e.target.value})} placeholder="Email"/>
-                                        <Btn onClick={() => updateShopSettings(shopInfo)}>Update Details</Btn>
-                                    </div>
-                                </Card>
+                                <Card><h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Icon name="store"/> Shop Status</h3><div className="flex gap-2"><Btn onClick={() => db.ref('settings').update({status: 'OPEN'})} variant={shopInfo.status==='OPEN'?'green':'secondary'} className="flex-1">OPEN</Btn><Btn onClick={() => db.ref('settings').update({status: 'CLOSED'})} variant={shopInfo.status==='CLOSED'?'danger':'secondary'} className="flex-1">CLOSED</Btn></div></Card>
+                                <Card><h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Icon name="edit"/> Shop Details</h3><div className="space-y-3"><input className="w-full p-3 border rounded-lg" value={shopInfo.name} onChange={e => setShopInfo({...shopInfo, name: e.target.value})} placeholder="Name"/><input className="w-full p-3 border rounded-lg" value={shopInfo.address} onChange={e => setShopInfo({...shopInfo, address: e.target.value})} placeholder="Address"/><Btn onClick={() => db.ref('settings').set(shopInfo)}>Update Details</Btn></div></Card>
                             </div>
                         )}
-                        
-                        {/* History & Inventory Tabs (Simplified for brevity, same logic as before) */}
                         {tab === 'inventory' && (
-                            <div className="space-y-3">{inv.map(p => (
-                                <Card key={p.id} className="relative">
-                                    <div className="flex justify-between items-center mb-2"><div><div className="font-bold">{p.name}</div><div className="text-xs text-gray-500">{p.variant}</div></div><div className="text-right"><div className="font-bold text-green-600">₹{p.price}</div><div className="text-xs text-gray-400">Qty: {p.stock}</div></div></div>
-                                    <div className="flex gap-2 border-t pt-2 mt-2"><Btn onClick={() => { setSelItem(p); setActiveModal(p.type==='has_colors'?'manage_stock':'edit'); }} variant="secondary" className="flex-1 py-2 text-xs">Edit</Btn><button onClick={() => { if(confirm("Delete?")) window.dbSet(window.dbRef(window.db, 'inventory/' + p.id), null); }} className="p-2 bg-red-50 text-red-500 rounded-lg"><Icon name="trash-2" size={16}/></button></div>
-                                </Card>
-                            ))}</div>
+                            <div className="space-y-3">{inv.map(p => (<Card key={p.id} className="relative"><div className="flex justify-between items-center mb-2"><div><div className="font-bold">{p.name}</div><div className="text-xs text-gray-500">{p.variant}</div></div><div className="text-right"><div className="font-bold text-green-600">₹{p.price}</div><div className="text-xs text-gray-400">Qty: {p.stock}</div></div></div><div className="flex gap-2 border-t pt-2 mt-2"><Btn onClick={() => { setSelItem(p); setActiveModal(p.type==='has_colors'?'manage_stock':'edit'); }} variant="secondary" className="flex-1 py-2 text-xs">Edit</Btn><button onClick={() => { if(confirm("Delete?")) db.ref('inventory/' + p.id).remove(); }} className="p-2 bg-red-50 text-red-500 rounded-lg"><Icon name="trash-2" size={16}/></button></div></Card>))}</div>
                         )}
                         {tab === 'history' && (
-                            <div className="space-y-3">
-                                <Card className="bg-blue-600 text-white"><div className="text-sm opacity-80">Total Sales</div><div className="text-3xl font-bold">₹{txs.reduce((s, t) => s + t.total, 0)}</div></Card>
-                                {txs.slice().reverse().map(t => (
-                                    <Card key={t.id} onClick={() => { setLastBill(t); setActiveModal('receipt'); }}>
-                                        <div className="flex justify-between font-bold"><span>{t.customerName}</span><span className="text-green-600">₹{t.total}</span></div>
-                                        <div className="text-xs text-gray-400">{new Date(t.date).toLocaleString()}</div>
-                                    </Card>
-                                ))}
-                            </div>
+                            <div className="space-y-3"><Card className="bg-blue-600 text-white"><div className="text-sm opacity-80">Total Sales</div><div className="text-3xl font-bold">₹{txs.reduce((s, t) => s + t.total, 0)}</div></Card>{txs.slice().reverse().map(t => (<Card key={t.id} onClick={() => { setLastBill(t); setActiveModal('receipt'); }}><div className="flex justify-between font-bold"><span>{t.customerName}</span><span className="text-green-600">₹{t.total}</span></div><div className="text-xs text-gray-400">{new Date(t.date).toLocaleString()}</div></Card>))}</div>
                         )}
                     </div>
 
-                    {cart.length > 0 && tab === 'pos' && (
-                        <div onClick={() => setActiveModal('checkout')} className="fixed bottom-24 left-4 right-4 bg-gray-900 text-white p-4 rounded-2xl shadow-2xl flex justify-between items-center z-40 animate-up cursor-pointer">
-                            <div className="flex items-center gap-3"><span className="bg-gray-700 px-3 py-1 rounded-lg font-bold">{cart.reduce((s, i) => s + i.qty, 0)}</span><span className="font-bold text-xl">₹{cart.reduce((s, i) => s + (i.price * i.qty), 0)}</span></div>
-                            <div className="flex items-center gap-2 font-bold text-blue-300">Checkout <Icon name="arrow-right"/></div>
-                        </div>
-                    )}
+                    {cart.length > 0 && tab === 'pos' && (<div onClick={() => setActiveModal('checkout')} className="fixed bottom-24 left-4 right-4 bg-gray-900 text-white p-4 rounded-2xl shadow-2xl flex justify-between items-center z-40 animate-up cursor-pointer"><div className="flex items-center gap-3"><span className="bg-gray-700 px-3 py-1 rounded-lg font-bold">{cart.reduce((s, i) => s + i.qty, 0)}</span><span className="font-bold text-xl">₹{cart.reduce((s, i) => s + (i.price * i.qty), 0)}</span></div><div className="flex items-center gap-2 font-bold text-blue-300">Checkout <Icon name="arrow-right"/></div></div>)}
+                    <div className="bg-white border-t h-16 flex justify-around items-center z-50 absolute bottom-0 w-full">{['pos', 'inventory', 'history', 'settings'].map(t => (<button key={t} onClick={() => setTab(t)} className={`flex flex-col items-center w-full py-2 ${tab === t ? 'text-blue-600' : 'text-gray-400'}`}><Icon name={t === 'pos' ? 'smartphone' : t === 'inventory' ? 'package' : t === 'history' ? 'history' : 'settings'}/><span className="text-[10px] font-bold mt-1 uppercase">{t === 'pos' ? 'Sale' : t}</span></button>))}</div>
 
-                    <div className="bg-white border-t h-16 flex justify-around items-center z-50 absolute bottom-0 w-full">
-                        {['pos', 'inventory', 'history', 'settings'].map(t => (
-                            <button key={t} onClick={() => setTab(t)} className={`flex flex-col items-center w-full py-2 ${tab === t ? 'text-blue-600' : 'text-gray-400'}`}>
-                                <Icon name={t === 'pos' ? 'smartphone' : t === 'inventory' ? 'package' : t === 'history' ? 'history' : 'settings'}/><span className="text-[10px] font-bold mt-1 uppercase">{t === 'pos' ? 'Sale' : t}</span>
-                            </button>
-                        ))}
-                    </div>
+                    {/* MODALS */}
+                    {activeModal === 'quick' && (<div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white w-full max-w-xs rounded-2xl p-6 relative"><h3 className="font-bold text-xl mb-4">Quick Sell</h3><input id="qName" placeholder="Item Name" className="w-full p-3 border rounded-xl mb-3"/><div className="flex gap-2 mb-3"><input id="qPrice" type="number" placeholder="Price" className="w-full p-3 border rounded-xl"/><input id="qQty" type="number" placeholder="Qty" defaultValue="1" className="w-full p-3 border rounded-xl"/></div><Btn onClick={()=>{ const n=document.getElementById('qName').value, p=document.getElementById('qPrice').value, q=document.getElementById('qQty').value; if(n && p) addToCart({id:'QS'+Date.now(), name:n, price:p, type:'custom', category:'Other'}, q, null, true); }} className="w-full">Add to Bill</Btn><button onClick={()=>setActiveModal(null)} className="w-full py-3 text-gray-400 mt-2">Cancel</button></div></div>)}
+                    {activeModal === 'color' && selItem && (<div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white w-full max-w-xs rounded-2xl p-6 relative"><button onClick={() => setActiveModal(null)} className="absolute right-4 top-4 bg-gray-100 p-2 rounded-full"><Icon name="x"/></button><h3 className="text-xl font-bold text-center mb-1">Select Color</h3><p className="text-center text-xs mb-4">{selItem.name}</p><input ref={colorInputRef} type="number" className="w-full text-center text-4xl font-bold p-4 bg-gray-100 rounded-xl mb-4" placeholder="#" value={selColor} onChange={e => setSelColor(e.target.value)} onKeyDown={e => { if(e.key === 'Enter') addToCart(selItem, 1, selColor); }} /><Btn onClick={() => addToCart(selItem, 1, selColor)} className="w-full text-lg">ADD TO BILL</Btn></div></div>)}
+                    {activeModal === 'checkout' && (<div className="fixed inset-0 bg-black/50 z-[60] flex items-end justify-center backdrop-blur-sm"><div className="bg-white w-full max-w-md rounded-t-3xl p-6 h-[85vh] flex flex-col animate-up shadow-2xl"><div className="flex justify-between items-center mb-4"><h2 className="text-2xl font-bold">Checkout</h2><button onClick={() => setActiveModal(null)}><Icon name="x"/></button></div><div className="flex-1 overflow-y-auto space-y-4 mb-4">{cart.map(i => (<div key={i.cartId} className="flex justify-between items-center border-b pb-2"><div><div className="font-bold">{i.name}</div><div className="text-sm text-blue-600">{i.variant}</div></div><div className="flex items-center gap-3"><div className="text-right"><div className="font-bold">₹{i.price * i.qty}</div><div className="text-xs text-gray-400">Qty: {i.qty}</div></div><button onClick={() => setCart(cart.filter(x => x.cartId !== i.cartId))} className="p-2 bg-red-50 text-red-600 rounded-full"><Icon name="trash-2" size={16}/></button></div></div>))}</div><div className="space-y-3 pt-4 border-t relative"><div className="relative z-50"><label className="text-xs font-bold text-gray-500 uppercase ml-1">Customer Name</label><input className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 outline-none" placeholder="Type to search..." value={custData.name} onChange={e => handleCustInput(e.target.value)}/>{suggestions.length > 0 && (<div className="absolute top-full left-0 w-full bg-white shadow-xl border border-gray-100 rounded-xl mt-1 max-h-48 overflow-y-auto z-[100]">{suggestions.map((s, idx) => (<div key={idx} onClick={() => { setCustData({name: s.name, mobile: s.mobile}); setSuggestions([]); }} className="p-3 border-b hover:bg-blue-50 flex justify-between items-center cursor-pointer"><span className="font-bold text-gray-800">{s.name}</span><span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">{s.mobile}</span></div>))}</div>)}</div><div><label className="text-xs font-bold text-gray-500 uppercase ml-1">Mobile</label><input type="tel" className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 outline-none" placeholder="Mobile Number" value={custData.mobile} onChange={e => setCustData(prev => ({ ...prev, mobile: e.target.value }))}/></div><Btn variant="black" className="w-full py-4 text-lg mt-2" onClick={processPayment}>CONFIRM PAYMENT</Btn></div></div></div>)}
+                    {activeModal === 'receipt' && lastBill && (<div className="fixed inset-0 bg-gray-900/95 z-[70] flex items-center justify-center p-4"><div className="bg-white w-full max-w-sm rounded-2xl p-6 text-center shadow-2xl"><div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="check" size={32}/></div><h2 className="text-2xl font-bold mb-1">Done!</h2><p className="text-gray-500 mb-6 font-mono text-lg">₹{lastBill.total}</p><div className="space-y-3"><Btn variant="black" className="w-full py-4" onClick={() => printReceipt(lastBill)}><Icon name="printer"/> Text Print</Btn><Btn variant="green" className="w-full py-4" onClick={() => window.open(`https://wa.me/91${lastBill.customerMobile}?text=${encodeURIComponent(getReceiptText(lastBill))}`, '_blank')}><Icon name="message-circle"/> WhatsApp</Btn></div><button onClick={() => setActiveModal(null)} className="mt-6 text-gray-400 text-sm underline">Close</button></div></div>)}
+                    {activeModal === 'edit' && selItem && (<div className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl"><h3 className="text-xl font-bold mb-4">{selItem.id ? 'Edit' : 'New'}</h3><div className="space-y-3"><div><label className="text-xs text-gray-500 font-bold">Category</label><select className="w-full p-3 border rounded-lg bg-white" value={selItem.category || 'Other'} onChange={e => setSelItem({...selItem, category: e.target.value})}>{CATEGORIES.slice(1).map(c=><option key={c} value={c}>{c}</option>)}</select></div><input className="w-full p-3 border rounded-lg" placeholder="Name" value={selItem.name} onChange={e => setSelItem({...selItem, name: e.target.value})}/><div className="flex gap-2"><input type="number" className="w-full p-3 border rounded-lg" placeholder="Price" value={selItem.price} onChange={e => setSelItem({...selItem, price: e.target.value})}/><input type="number" className="w-full p-3 border rounded-lg" placeholder="Stock" value={selItem.stock} onChange={e => setSelItem({...selItem, stock: e.target.value})}/></div><div className="flex items-center gap-2"><input type="checkbox" checked={selItem.type === 'has_colors'} onChange={e => setSelItem({...selItem, type: e.target.checked ? 'has_colors' : 'standard'})}/><label>Color Tracked</label></div><Btn onClick={saveItemToCloud} className="w-full mt-2">Save</Btn><button onClick={() => setActiveModal(null)} className="w-full py-3 text-gray-400">Cancel</button></div></div></div>)}
+                    {activeModal === 'manage_stock' && selItem && (<div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white w-full max-w-sm rounded-2xl p-6 h-[70vh] flex flex-col shadow-2xl"><div className="flex justify-between items-center mb-4"><div><h3 className="font-bold text-lg">Stock</h3><p className="text-xs text-gray-500">{selItem.name}</p></div><button onClick={() => setActiveModal(null)}><Icon name="x"/></button></div><div className="flex gap-2 mb-4 p-3 bg-blue-50 rounded-xl"><input id="sc" type="number" placeholder="#" className="w-1/2 p-2 rounded border"/><input id="sq" type="number" placeholder="Qty" className="w-1/3 p-2 rounded border"/><Btn onClick={() => { const c = document.getElementById('sc').value, q = document.getElementById('sq').value; if(!c || !q) return; const newItem = { ...selItem, stock: parseInt(selItem.stock) + parseInt(q), colorStock: { ...(selItem.colorStock||{}), [c]: (selItem.colorStock?.[c]||0) + parseInt(q) } }; setSelItem(newItem); db.ref('inventory/' + selItem.id).set(newItem); document.getElementById('sc').value = ''; document.getElementById('sq').value = ''; }} className="text-xs">Add</Btn></div><div className="flex-1 overflow-y-auto bg-gray-50 rounded-xl p-2 border"><table className="w-full text-sm"><thead className="text-gray-500 text-xs border-b"><tr><th className="text-left pb-2">Color #</th><th className="text-right pb-2">Qty</th></tr></thead><tbody className="divide-y">{Object.entries(selItem.colorStock || {}).map(([c, q]) => <tr key={c}><td className="py-2 font-bold text-gray-700">#{c}</td><td className="py-2 text-right font-bold text-blue-600">{q}</td></tr>)}</tbody></table></div></div></div>)}
+                </div>
+            );
+        };
 
-                    {/* Modals (Quick Sell, Color, Checkout, Receipt, Edit, Manage Stock) - Logic Preserved from Previous Version */}
-                    {activeModal === 'quick' && (
-                        <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white w-full max-w-xs rounded-2xl p-6 relative"><h3 className="font-bold text-xl mb-4">Quick Sell</h3><input id="qName" placeholder="Item Name" className="w-full p-3 border rounded-xl mb-3"/><div className="flex gap-2 mb-3"><input id="qPrice" type="number" placeholder="Price" className="w-full p-3 border rounded-xl"/><input id="qQty" type="number" placeholder="Qty" defaultValue="1" className="w-full p-3 border rounded-xl"/></div><Btn onClick={()=>{ const n=document.getElementById('qName').value, p=document.getElementById('qPrice').value, q=document.getElementById('qQty').value; if(n && p) addToCart({id:'QS'+Date.now(), name:n, price:p, type:'custom', category:'Other'}, q, null, true); }} className="w-full">Add to Bill</Btn><button onClick={()=>setActiveModal(null)} className="w-full py-3 text-gray-400 mt-2">Cancel</button></div></div>
-                    )}
-                    {activeModal === 'color' && selItem && (
-                        <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white w-full max-w-xs rounded-2xl p-6 relative"><button onClick={() => setActiveModal(null)} className="absolute right-4 top-4 bg-gray-100 p-2 rounded-full"><Icon name="x"/></button><h3 className="text-xl font-bold text-center mb-1">Select Color</h3><p className="text-center text-xs mb-4">{selItem.name}</p><input ref={colorInputRef} type="number" className="w-full text-center text-4xl font-bold p-4 bg-gray-100 rounded-xl mb-4" placeholder="#" value={selColor} onChange={e => setSelColor(e.target.value)} onKeyDown={e => { if(e.key === 'Enter') addToCart(selItem, 1, selColor); }} /><Btn onClick={() => addToCart(selItem, 1, selColor)} className="w-full text-lg">ADD TO BILL</Btn></div></div>
-                    )}
-                    {activeModal === 'checkout' && (
-                        <div className="fixed inset-0 bg-black/50 z-[60] flex items-end justify-center backdrop-blur-sm"><div className="bg-white w-full max-w-md rounded-t-3xl p-6 h-[85vh] flex flex-col animate-up shadow-2xl"><div className="flex justify-between items-center mb-4"><h2 className="text-2xl font-bold">Checkout</h2><button onClick={() => setActiveModal(null)}><Icon name="x"/></button></div><div className="flex-1 overflow-y-auto space-y-4 mb-4">{cart.map(i => (<div key={i.cartId} className="flex justify-between items-center border-b pb-2"><div><div className="font-bold">{i.name}</div><div className="text-sm text-blue-600">{i.variant}</div></div><div className="flex items-center gap-3"><div className="text-right"><div className="font-bold">₹{i.price * i.qty}</div><div className="text-xs text-gray-400">Qty: {i.qty}</div></div><button onClick={() => setCart(cart.filter(x => x.cartId !== i.cartId))} className="p-2 bg-red-50 text-red-600 rounded-full"><Icon name="trash-2" size={16}/></button></div></div>))}</div><div className="space-y-3 pt-4 border-t relative"><div className="relative z-50"><label className="text-xs font-bold text-gray-500 uppercase ml-1">Customer Name</label><input className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 outline-none" placeholder="Type to search..." value={custData.name} onChange={e => { setCustData(prev => ({ ...prev, name: e.target.value })); if(e.target.value.length > 1) { const uniqueCusts = []; const seen = new Set(); txs.forEach(t => { if (t.customerMobile && !seen.has(t.customerMobile)) { seen.add(t.customerMobile); uniqueCusts.push({ name: t.customerName, mobile: t.customerMobile }); } }); const matches = uniqueCusts.filter(c => c.name.toLowerCase().includes(e.target.value.toLowerCase()) || c.mobile.includes(e.target.value)); setSuggestions(matches.slice(0, 5)); } else setSuggestions([]); }}/>{suggestions.length > 0 && (<div className="absolute top-full left-0 w-full bg-white shadow-xl border border-gray-100 rounded-xl mt-1 max-h-48 overflow-y-auto z-[100]">{suggestions.map((s, idx) => (<div key={idx} onClick={() => { setCustData({name: s.name, mobile: s.mobile}); setSuggestions([]); }} className="p-3 border-b hover:bg-blue-50 flex justify-between items-center cursor-pointer"><span className="font-bold text-gray-800">{s.name}</span><span className="text-xs text-gray-500 bg-gray-100 px-2 py-1 rounded-full">{s.mobile}</span></div>))}</div>)}</div><div><label className="text-xs font-bold text-gray-500 uppercase ml-1">Mobile</label><input type="tel" className="w-full p-3 bg-gray-50 rounded-xl border border-gray-200 outline-none" placeholder="Mobile Number" value={custData.mobile} onChange={e => setCustData(prev => ({ ...prev, mobile: e.target.value }))}/></div><Btn variant="black" className="w-full py-4 text-lg mt-2" onClick={processPayment}>CONFIRM PAYMENT</Btn></div></div></div>
-                    )}
-                    {activeModal === 'receipt' && lastBill && (
-                        <div className="fixed inset-0 bg-gray-900/95 z-[70] flex items-center justify-center p-4"><div className="bg-white w-full max-w-sm rounded-2xl p-6 text-center shadow-2xl"><div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="check" size={32}/></div><h2 className="text-2xl font-bold mb-1">Payment Done!</h2><p className="text-gray-500 mb-6 font-mono text-lg">₹{lastBill.total}</p><div className="space-y-3"><Btn variant="black" className="w-full py-4" onClick={() => printReceipt(lastBill)}><Icon name="printer"/> Text Print</Btn><Btn variant="green" className="w-full py-4" onClick={() => window.open(`https://wa.me/91${lastBill.customerMobile}?text=${encodeURIComponent(getReceiptText(lastBill))}`, '_blank')}><Icon name="message-circle"/> WhatsApp</Btn></div><button onClick={() => setActiveModal(null)} className="mt-6 text-gray-400 text-sm underline">Close</button></div></div>
-                    )}
-                    {activeModal === 'edit' && selItem && (
-                        <div className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl"><h3 className="text-xl font-bold mb-4">{selItem.id ? 'Edit' : 'New'}</h3><div className="space-y-3"><div><label className="text-xs text-gray-500 font-bold">Category</label><select className="w-full p-3 border rounded-lg bg-white" value={selItem.category || 'Other'} onChange={e => setSelItem({...selItem, category: e.target.value})}>{CATEGORIES.slice(1).map(c=><option key={c} value={c}>{c}</option>)}</select></div><input className="w-full p-3 border rounded-lg" placeholder="Name" value={selItem.name} onChange={e => setSelItem({...selItem, name: e.target.value})}/><div className="flex gap-2"><input type="number" className="w-full p-3 border rounded-lg" placeholder="Price" value={selItem.price} onChange={e => setSelItem({...selItem, price: e.target.value})}/><input type="number" className="w-full p-3 border rounded-lg" placeholder="Stock" value={selItem.stock} onChange={e => setSelItem({...selItem, stock: e.target.value})}/></div><div className="flex items-center gap-2"><input type="checkbox" checked={selItem.type === 'has_colors'} onChange={e => setSelItem({...selItem, type: e.target.checked ? 'has_colors' : 'standard'})}/><label>Color Tracked</label></div><Btn onClick={saveItemToCloud} className="w-full mt-2">Save</Btn><button onClick={() => setActiveModal(null)} className="w-full py-3 text-gray-400">Cancel</button></div></div></div>
-                    )}
-                    {activeModal === 'manage_stock' && selItem && (
-                        <div className="fixed inset-0 bg-black/50 z-[60] flex items-center justify-center p-4 backdrop-blur-sm"><div className="bg-white w-full max-w-sm rounded-2xl p-6 h-[70vh] flex flex-col shadow-2xl"><div className="flex justify-between items-center mb-4"><div><h3 className="font-bold text-lg">Stock</h3><p className="text-xs text-gray-500">{selItem.name}</p></div><button onClick={() => setActiveModal(null)}><Icon name="x"/></button></div><div className="flex gap-2 mb-4 p-3 bg-blue-50 rounded-xl"><input id="sc" type="number" placeholder="#" className="w-1/2 p-2 rounded border"/><input id="sq" type="num
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
