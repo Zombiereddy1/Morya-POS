@@ -1,0 +1,382 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Morya POS Pro</title>
+
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+
+    <style>
+        body { background-color: #f8fafc; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
+        .invoice-font { font-family: 'Courier New', Courier, monospace; }
+        .animate-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect } = React;
+        const { jsPDF } = window.jspdf;
+
+        // --- Config ---
+        const ADMIN_MOBILE = "7083522162"; 
+        const STORAGE = { INV: "morya_inv_v3", TRANS: "morya_trans_v3", CUST: "morya_cust_v3" };
+
+        // --- Components ---
+        const Icon = ({ name, size = 20, className }) => {
+            useEffect(() => lucide.createIcons(), [name]);
+            return <i data-lucide={name} width={size} height={size} className={className}></i>;
+        };
+
+        const Button = ({ onClick, children, variant = "primary", className = "" }) => {
+            const styles = {
+                primary: "bg-blue-600 text-white shadow-lg shadow-blue-200",
+                secondary: "bg-gray-100 text-gray-800",
+                purple: "bg-purple-600 text-white shadow-lg shadow-purple-200",
+                success: "bg-green-600 text-white shadow-lg shadow-green-200"
+            };
+            return (
+                <button onClick={onClick} className={`w-full py-3.5 rounded-xl font-bold flex justify-center items-center gap-2 active:scale-95 transition-all ${styles[variant]} ${className}`}>
+                    {children}
+                </button>
+            );
+        };
+
+        // --- Main App ---
+        const App = () => {
+            const [view, setView] = useState("auth"); 
+            const [inventory, setInventory] = useState([]);
+            const [cart, setCart] = useState([]);
+            const [customers, setCustomers] = useState([]);
+            const [transactions, setTransactions] = useState([]);
+            
+            // Temporary States
+            const [activeModal, setActiveModal] = useState(null);
+            const [selectedItem, setSelectedItem] = useState(null);
+            const [checkout, setCheckout] = useState({ mobile: "", name: "" });
+            const [suggestions, setSuggestions] = useState([]);
+            const [lastBill, setLastBill] = useState(null);
+
+            // Load Data
+            useEffect(() => {
+                const load = (k, s, d) => {
+                    const v = localStorage.getItem(k);
+                    if(v) s(JSON.parse(v));
+                    else { s(d); localStorage.setItem(k, JSON.stringify(d)); }
+                };
+                load(STORAGE.INV, setInventory, [{ id: 1, name: "Asther Fall", price: 350, type: "color", stock: {} }]);
+                load(STORAGE.CUST, setCustomers, []);
+                load(STORAGE.TRANS, setTransactions, []);
+            }, []);
+
+            // --- Features ---
+
+            // 1. Smart Customer Search
+            const handleMobileInput = (val) => {
+                setCheckout(p => ({ ...p, mobile: val }));
+                if (val.length > 2) {
+                    const matches = customers.filter(c => c.mobile.includes(val) || c.name.toLowerCase().includes(val.toLowerCase()));
+                    setSuggestions(matches);
+                } else setSuggestions([]);
+            };
+
+            const pickCustomer = (c) => {
+                setCheckout({ mobile: c.mobile, name: c.name });
+                setSuggestions([]);
+            };
+
+            // 2. Quick Sale Logic
+            const handleQuickSale = () => {
+                const name = document.getElementById('qName').value;
+                const price = parseFloat(document.getElementById('qPrice').value);
+                const qty = parseInt(document.getElementById('qQty').value);
+
+                if(!name || !price || !qty) return alert("Fill all fields");
+
+                const newItem = {
+                    id: "QS-" + Date.now(), // Unique ID for quick sale
+                    name: name,
+                    price: price,
+                    type: "custom",
+                    qty: qty,
+                    total: price * qty,
+                    selectedColor: null
+                };
+                
+                setCart([...cart, newItem]);
+                setActiveModal(null);
+            };
+
+            // 3. Normal Add to Cart
+            const addToCart = (item, qty, color) => {
+                const q = parseInt(qty);
+                if (q <= 0) return;
+                setCart([...cart, { ...item, qty: q, selectedColor: color, total: item.price * q, cartId: Date.now() }]);
+                setActiveModal(null);
+            };
+
+            // 4. Checkout & Save
+            const finishSale = () => {
+                if(!checkout.mobile || !checkout.name) return alert("Customer details required");
+
+                // Update Stock (Only for inventory items)
+                const newInv = inventory.map(inv => {
+                    const cartItems = cart.filter(c => c.id === inv.id);
+                    if(!cartItems.length) return inv;
+                    let s = inv.type === 'standard' ? inv.stock : {...inv.stock};
+                    cartItems.forEach(c => {
+                        if(inv.type === 'standard') s -= c.qty;
+                        else s[c.selectedColor] -= c.qty;
+                    });
+                    return {...inv, stock: s};
+                });
+
+                // Save Customer
+                const existing = customers.find(c => c.mobile === checkout.mobile);
+                const newCusts = existing 
+                    ? customers.map(c => c.mobile === checkout.mobile ? {...c, name: checkout.name} : c)
+                    : [...customers, { mobile: checkout.mobile, name: checkout.name }];
+
+                // Save Bill
+                const bill = { id: Date.now(), date: new Date().toISOString(), customer: checkout, items: cart, total: cart.reduce((a,b)=>a+b.total,0) };
+                
+                setInventory(newInv);
+                setCustomers(newCusts);
+                setTransactions([bill, ...transactions]);
+                
+                // Persist
+                localStorage.setItem(STORAGE.INV, JSON.stringify(newInv));
+                localStorage.setItem(STORAGE.CUST, JSON.stringify(newCusts));
+                localStorage.setItem(STORAGE.TRANS, JSON.stringify([bill, ...transactions]));
+
+                setLastBill(bill);
+                setCart([]);
+                setCheckout({mobile:"", name:""});
+                setActiveModal("receipt");
+            };
+
+            // 5. PDF Generator
+            const generatePDF = (bill) => {
+                const doc = new jsPDF({ unit: 'mm', format: [58, 160] });
+                doc.setFont("courier", "bold"); doc.setFontSize(12);
+                doc.text("MORYA MATCHING", 29, 8, { align: "center" });
+                
+                doc.setFontSize(8); doc.setFont("courier", "normal");
+                doc.text("Owner: " + ADMIN_MOBILE, 29, 13, { align: "center" });
+                doc.text("--------------------------------", 2, 17);
+                
+                doc.text(`Bill: ${bill.id.toString().slice(-4)}`, 2, 22);
+                doc.text(`Date: ${new Date(bill.date).toLocaleDateString()}`, 2, 26);
+                doc.text(`Cust: ${bill.customer.name}`, 2, 30);
+                doc.text(`Mob : ${bill.customer.mobile}`, 2, 34);
+                
+                doc.text("--------------------------------", 2, 38);
+                let y = 42;
+                
+                bill.items.forEach(i => {
+                    let n = i.name;
+                    if(i.type === 'custom') n = "*" + n; // Mark custom items
+                    if(i.selectedColor) n += ` (#${i.selectedColor})`;
+                    
+                    doc.text(n.substring(0, 20), 2, y);
+                    doc.text(`${i.qty} x ${i.price}`, 2, y+4);
+                    doc.text(i.total.toFixed(2), 56, y+4, { align: "right" });
+                    y += 9;
+                });
+                
+                doc.text("--------------------------------", 2, y);
+                doc.setFontSize(12); doc.setFont("courier", "bold");
+                doc.text(`TOTAL: Rs.${bill.total}`, 56, y+6, { align: "right" });
+                
+                doc.save(`Bill_${bill.customer.name}.pdf`);
+            };
+
+            // --- Views ---
+
+            if(view === "auth") return (
+                <div className="h-screen bg-blue-600 flex items-center justify-center p-6">
+                    <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-sm text-center">
+                        <div className="bg-blue-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600"><Icon name="store" size={32}/></div>
+                        <h1 className="text-2xl font-bold mb-6">Morya POS</h1>
+                        <input type="tel" placeholder="Enter Mobile" className="w-full text-center text-xl p-3 border rounded-xl bg-gray-50 tracking-widest mb-4"
+                            onChange={(e) => {
+                                if(e.target.value.length === 10) {
+                                    if(e.target.value === ADMIN_MOBILE) setView("admin");
+                                    else setView("customer"); // Basic customer view logic omitted for brevity
+                                }
+                            }}
+                        />
+                        <p className="text-gray-400 text-xs">Admin: {ADMIN_MOBILE}</p>
+                    </div>
+                </div>
+            );
+
+            if(view === "admin") return (
+                <div className="min-h-screen pb-32">
+                    {/* Header */}
+                    <div className="bg-white p-4 shadow sticky top-0 z-20 flex justify-between items-center">
+                        <h1 className="font-bold text-lg text-gray-800 flex items-center gap-2">
+                            <Icon name="layout-dashboard" className="text-blue-600"/> Dashboard
+                        </h1>
+                        <button onClick={()=>setView("auth")} className="p-2 bg-gray-100 rounded-full"><Icon name="log-out" size={18}/></button>
+                    </div>
+
+                    {/* Quick Actions */}
+                    <div className="p-4">
+                        <Button variant="purple" onClick={()=>setActiveModal("quickSale")}>
+                            <Icon name="zap" className="text-yellow-300 fill-yellow-300"/> Quick Sale (Custom Item)
+                        </Button>
+                    </div>
+
+                    {/* Inventory Grid */}
+                    <div className="px-4 grid grid-cols-2 gap-3">
+                        {inventory.map(item => (
+                            <div key={item.id} onClick={() => { setSelectedItem(item); setActiveModal("add"); }}
+                                className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm active:scale-95 transition-transform relative overflow-hidden">
+                                <div className="absolute top-0 right-0 bg-blue-100 text-blue-600 px-2 py-1 text-[10px] font-bold rounded-bl-lg">#{item.id}</div>
+                                <h3 className="font-bold text-gray-800 mt-2">{item.name}</h3>
+                                <p className="text-blue-600 font-bold mt-1">₹{item.price}</p>
+                            </div>
+                        ))}
+                    </div>
+
+                    {/* Floating Cart */}
+                    {cart.length > 0 && (
+                        <div onClick={()=>setActiveModal("checkout")} className="fixed bottom-6 left-4 right-4 bg-gray-900 text-white p-4 rounded-2xl shadow-2xl flex justify-between items-center z-30 animate-up">
+                            <div className="flex items-center gap-3">
+                                <span className="bg-blue-500 w-10 h-10 rounded-full flex items-center justify-center font-bold">{cart.length}</span>
+                                <div><p className="text-xs text-gray-400">Total Bill</p><p className="font-bold text-xl">₹{cart.reduce((a,b)=>a+b.total,0)}</p></div>
+                            </div>
+                            <div className="flex items-center gap-2 font-bold text-blue-300">Checkout <Icon name="arrow-right"/></div>
+                        </div>
+                    )}
+
+                    {/* --- Modals --- */}
+                    
+                    {/* 1. Quick Sale Modal */}
+                    {activeModal === "quickSale" && (
+                        <div className="fixed inset-0 bg-black/80 z-50 flex items-end justify-center">
+                            <div className="bg-white w-full max-w-md rounded-t-2xl p-6 animate-up">
+                                <div className="flex justify-between items-center mb-6">
+                                    <h2 className="font-bold text-xl flex gap-2 items-center"><Icon name="zap" className="text-purple-600"/> Quick Sale</h2>
+                                    <button onClick={()=>setActiveModal(null)}><Icon name="x"/></button>
+                                </div>
+                                <div className="space-y-4">
+                                    <input id="qName" placeholder="Item Name (e.g. Saree Fall)" className="w-full p-4 border rounded-xl bg-gray-50"/>
+                                    <div className="grid grid-cols-2 gap-4">
+                                        <input id="qPrice" type="number" placeholder="Price (₹)" className="w-full p-4 border rounded-xl bg-gray-50"/>
+                                        <input id="qQty" type="number" defaultValue="1" placeholder="Qty" className="w-full p-4 border rounded-xl bg-gray-50"/>
+                                    </div>
+                                    <Button variant="purple" onClick={handleQuickSale}>Add to Bill</Button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 2. Inventory Add Modal */}
+                    {activeModal === "add" && selectedItem && (
+                        <div className="fixed inset-0 bg-black/80 z-50 flex items-end justify-center">
+                            <div className="bg-white w-full max-w-md rounded-t-2xl p-6 animate-up">
+                                <h2 className="font-bold text-xl mb-4">{selectedItem.name}</h2>
+                                {selectedItem.type === 'color' && <input id="cColor" type="number" placeholder="Color Number (e.g. 101)" className="w-full p-4 border rounded-xl mb-3 bg-gray-50"/>}
+                                <input id="cQty" type="number" defaultValue="1" className="w-full p-4 border rounded-xl mb-4 bg-gray-50"/>
+                                <Button onClick={() => {
+                                    const col = document.getElementById('cColor')?.value;
+                                    const qty = document.getElementById('cQty').value;
+                                    if(selectedItem.type === 'color' && !col) return alert("Enter Color!");
+                                    addToCart(selectedItem, qty, col);
+                                }}>Add Item</Button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 3. Checkout Modal */}
+                    {activeModal === "checkout" && (
+                        <div className="fixed inset-0 bg-white z-50 flex flex-col">
+                            <div className="p-4 border-b flex justify-between items-center">
+                                <h2 className="font-bold text-lg">Checkout</h2>
+                                <button onClick={()=>setActiveModal(null)} className="p-2 bg-gray-100 rounded-full"><Icon name="x"/></button>
+                            </div>
+                            <div className="flex-1 p-4 overflow-y-auto">
+                                {/* Search Customer */}
+                                <div className="mb-6 relative">
+                                    <label className="text-xs font-bold text-gray-500 uppercase">Customer Mobile</label>
+                                    <div className="relative">
+                                        <input type="tel" value={checkout.mobile} onChange={e=>handleMobileInput(e.target.value)} 
+                                            placeholder="Start typing mobile..." className="w-full p-4 pl-12 border rounded-xl bg-blue-50 font-mono text-lg font-bold"/>
+                                        <Icon name="search" className="absolute left-4 top-4 text-gray-400" size={20}/>
+                                    </div>
+                                    {/* Auto-Complete Dropdown */}
+                                    {suggestions.length > 0 && (
+                                        <div className="absolute top-full left-0 right-0 bg-white shadow-xl border rounded-xl mt-2 z-20 max-h-48 overflow-y-auto">
+                                            {suggestions.map(s => (
+                                                <div key={s.mobile} onClick={()=>pickCustomer(s)} className="p-4 border-b hover:bg-gray-50 flex justify-between items-center">
+                                                    <span className="font-bold">{s.name}</span>
+                                                    <span className="text-gray-400 text-sm">{s.mobile}</span>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                    <input placeholder="Customer Name" value={checkout.name} onChange={e=>setCheckout({...checkout, name: e.target.value})} className="w-full p-4 border rounded-xl mt-3"/>
+                                </div>
+
+                                {/* Cart List */}
+                                <div className="space-y-3">
+                                    {cart.map((item, idx) => (
+                                        <div key={idx} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg border">
+                                            <div>
+                                                <p className="font-bold text-gray-800">{item.name}</p>
+                                                <p className="text-xs text-gray-500">{item.qty} x ₹{item.price} {item.selectedColor && `(#${item.selectedColor})`}</p>
+                                            </div>
+                                            <p className="font-bold">₹{item.total}</p>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="p-4 border-t bg-white">
+                                <Button onClick={finishSale} variant="success">CONFIRM & PRINT</Button>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* 4. Receipt Success Modal */}
+                    {activeModal === "receipt" && lastBill && (
+                        <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-6">
+                            <div className="bg-white w-full max-w-sm rounded-2xl overflow-hidden animate-up">
+                                <div className="bg-green-500 p-6 text-center text-white">
+                                    <div className="bg-white/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3"><Icon name="check" size={32}/></div>
+                                    <h2 className="font-bold text-2xl">Sale Done!</h2>
+                                </div>
+                                <div className="p-6 space-y-3">
+                                    <p className="text-center text-gray-500 mb-4">Invoice #{lastBill.id.toString().slice(-4)}</p>
+                                    <Button variant="secondary" onClick={()=>generatePDF(lastBill)}>
+                                        <Icon name="printer" className="text-gray-600"/> Download PDF Bill
+                                    </Button>
+                                    <Button variant="secondary" onClick={()=>{
+                                        const msg = `*Morya Matching Invoice* %0AHello ${lastBill.customer.name}, %0AAmount: ₹${lastBill.total}. %0AThank you!`;
+                                        window.open(`https://wa.me/91${lastBill.customer.mobile}?text=${msg}`);
+                                    }}>
+                                        <Icon name="message-circle" className="text-green-600"/> WhatsApp Bill
+                                    </Button>
+                                    <Button variant="primary" onClick={()=>setActiveModal(null)}>New Sale</Button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
