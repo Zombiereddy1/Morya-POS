@@ -163,19 +163,24 @@
 
             const addToCart = (item, qty = 1, color = null) => {
                 const cartId = item.id + (color ? `-${color}` : '');
-                const existing = cart.find(c => c.cartId === cartId);
                 
-                if (existing) {
-                    setCart(cart.map(c => c.cartId === cartId ? { ...c, qty: c.qty + 1 } : c));
-                } else {
-                    setCart([...cart, { 
-                        ...item, 
-                        qty: 1, 
-                        cartId, 
-                        variant: color ? `Color ${color}` : item.variant,
-                        colorNumber: color 
-                    }]);
-                }
+                // FIX: Use 'prev' to get the latest cart state immediately
+                setCart(prev => {
+                    const existing = prev.find(c => c.cartId === cartId);
+                    if (existing) {
+                        return prev.map(c => c.cartId === cartId ? { ...c, qty: c.qty + parseInt(qty) } : c);
+                    } else {
+                        return [...prev, { 
+                            ...item, 
+                            qty: parseInt(qty), 
+                            cartId, 
+                            variant: color ? `Color ${color}` : item.variant,
+                            colorNumber: color 
+                        }];
+                    }
+                });
+                setActiveModal(null); setSelColor('');
+            };
                 setActiveModal(null); setSelColor('');
             };
 
