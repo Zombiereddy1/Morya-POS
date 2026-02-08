@@ -20,5 +20,5 @@ jobs:
           sed -i "s/__SENDER_ID__/${{ secrets.FIREBASE_SENDER_ID }}/g" index.html
           sed -i "s/__APP_ID__/${{ secrets.FIREBASE_APP_ID }}/g" index.html
 
-      # (Add your APK build steps here if you have them, or deploy to Pages)
+      # Add deployment step (e.g. to Netlify or GitHub Pages)
       
