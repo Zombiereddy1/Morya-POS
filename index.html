@@ -11,13 +11,16 @@
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     <script src="https://unpkg.com/lucide@latest"></script>
+    
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 
     <style>
-        body { background: #f3f4f6; touch-action: manipulation; -webkit-tap-highlight-color: transparent; font-family: sans-serif; }
+        body { background: #f3f4f6; -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; font-family: sans-serif; }
         ::-webkit-scrollbar { display: none; }
         .hide-scroll::-webkit-scrollbar { display: none; }
+        .animate-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+        @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
     </style>
 </head>
 <body>
@@ -26,9 +29,8 @@
     <script type="text/babel">
         const { useState, useEffect, useRef } = React;
 
-        // --- 1. SECURE CONFIG (Placeholders) ---
-        // GitHub Actions will replace these values during the build process
-        const firebaseConfig = {
+        // --- 1. CONFIGURATION (Placeholders for GitHub) ---
+        const configTemplate = {
             apiKey: "__API_KEY__",
             authDomain: "__AUTH_DOMAIN__",
             databaseURL: "__DB_URL__",
@@ -39,7 +41,7 @@
         };
 
         // --- Defaults ---
-        const MASTER_ADMIN_MOBILE = "7083522162"; // Fallback login ID
+        const ADMIN_MOBILE = "7083522162";
         const CATEGORIES = ["All", "Cloth", "Saree", "Fall", "Lining", "Other"];
         const DEFAULT_SHOP = { 
             name: "Morya Matching Centre", 
@@ -80,8 +82,9 @@
             const [inv, setInv] = useState([]);
             const [txs, setTxs] = useState([]);
             const [shopInfo, setShopInfo] = useState(DEFAULT_SHOP);
+            const [fbConfig, setFbConfig] = useState(null);
             
-            // UI State
+            // UI
             const [tab, setTab] = useState('pos');
             const [cart, setCart] = useState([]);
             const [search, setSearch] = useState('');
@@ -94,27 +97,28 @@
             const [lastBill, setLastBill] = useState(null);
             const colorInputRef = useRef(null);
 
-            // 1. BOOTSTRAP
+            // 1. BOOTSTRAP (Smart Key Detection)
             useEffect(() => {
                 try {
-                    // Check if keys are replaced (Not placeholders)
-                    if (firebaseConfig.apiKey.includes("__API_KEY__")) {
-                        // If running locally in Acode without build, prompt for keys
-                        const localKeys = localStorage.getItem('local_dev_keys');
-                        if(localKeys) {
-                            if (!firebase.apps.length) firebase.initializeApp(JSON.parse(localKeys));
+                    let finalConfig = configTemplate;
+                    
+                    // Check if running in Acode/Local (Placeholders exist)
+                    if (finalConfig.apiKey.includes("__API_KEY__")) {
+                        const local = localStorage.getItem('local_dev_keys');
+                        if (local) {
+                            finalConfig = JSON.parse(local);
                         } else {
-                            const manualKey = prompt("DEV MODE: GitHub Keys not found. Paste API Key to test:");
-                            if(manualKey) {
-                                const devConfig = { ...firebaseConfig, apiKey: manualKey, databaseURL: "https://moryapos-default-rtdb.firebaseio.com" }; // Simplified for dev
-                                localStorage.setItem('local_dev_keys', JSON.stringify(devConfig));
-                                if (!firebase.apps.length) firebase.initializeApp(devConfig);
-                            } else return;
+                            // If no keys found, ask user (Dev Mode)
+                            const input = prompt("SETUP: Paste Firebase Config JSON to start:");
+                            if(input) {
+                                finalConfig = JSON.parse(input);
+                                localStorage.setItem('local_dev_keys', JSON.stringify(finalConfig));
+                            } else return alert("Cannot start without keys");
                         }
-                    } else {
-                        if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
                     }
 
+                    setFbConfig(finalConfig); // Save for Admin Password check
+                    if (!firebase.apps.length) firebase.initializeApp(finalConfig);
                     const database = firebase.database();
                     setDb(database);
                     
@@ -138,11 +142,8 @@
 
             const handleAdminLogin = () => {
                 const pin = prompt("Enter Admin Password (API Key):");
-                // Security: Match against Config Key OR stored local key
-                const currentKey = firebaseConfig.apiKey.includes("__") ? JSON.parse(localStorage.getItem('local_dev_keys'))?.apiKey : firebaseConfig.apiKey;
-                
-                if (pin === currentKey) {
-                    const u = { mobile: MASTER_ADMIN_MOBILE, role: 'admin' };
+                if (pin === fbConfig.apiKey) {
+                    const u = { mobile: ADMIN_MOBILE, role: 'admin' };
                     setUser(u); setView('admin_dash');
                     localStorage.setItem('morya_session', JSON.stringify(u));
                 } else alert("Access Denied");
@@ -168,6 +169,7 @@
 
             const logout = () => { localStorage.removeItem('morya_session'); setUser(null); setView('website'); };
 
+            // Admin Actions
             const saveItemToCloud = () => {
                 if(!selItem.name || !selItem.price) return alert("Fields missing");
                 const id = selItem.id || Date.now().toString();
@@ -212,57 +214,39 @@
                 setLastBill(bill); setCart([]); setActiveModal("receipt");
             };
 
-                        // --- TEXT RECEIPT GENERATOR ---
+            // Receipt Text (Fixed Backticks)
             const getReceiptText = (b) => {
-                let t = `   *${shopInfo.name}*\n`;
-                t += `   ${shopInfo.prop}\n`;
-                t += `   ${shopInfo.mobile}\n`;
-                t += `   ${shopInfo.address}\n`;
-                t += `--------------------------------\n`;
-                t += `Bill: ${b.id.slice(-6)}\n`;
-                t += `Date: ${new Date(b.date).toLocaleDateString()}\n`;
-                t += `Cust: ${b.customerName} (${b.customerMobile})\n`;
-                t += `--------------------------------\n`;
-                t += `ITEM          QTY    PRICE\n`;
+                let t = `   *${shopInfo.name}*\n   ${shopInfo.prop}\n   ${shopInfo.mobile}\n   ${shopInfo.address}\n`;
+                t += `--------------------------------\nBill: ${b.id.slice(-6)}\nDate: ${new Date(b.date).toLocaleDateString()}\nCust: ${b.customerName}\n--------------------------------\n`;
                 b.items.forEach(i => {
-                    let n = i.name + (i.variant !== 'Std' ? `(${i.variant})` : '');
-                    n = n.length > 12 ? n.substring(0, 12) + ".." : n.padEnd(14, ' ');
-                    let q = String(i.qty).padStart(3, ' ');
-                    let p = String(i.price * i.qty).padStart(7, ' ');
-                    t += `${n}${q}${p}\n`;
+                    let n = i.name + (i.variant !== 'Std' ? ` (${i.variant})` : '');
+                    t += `${n.padEnd(15)} ${String(i.qty).padStart(2)} ${String(i.price * i.qty).padStart(6)}\n`;
                 });
-                t += `--------------------------------\n`;
-                t += `TOTAL:        Rs. ${b.total}\n`;
-                t += `--------------------------------\n`;
-                t += ` No Exchange | No Refund\n`;
-                t += `   Thank You for Visiting!\n`;
+                t += `--------------------------------\nTOTAL:        Rs. ${b.total}\n--------------------------------\n No Exchange | No Refund\n   Thank You!\n`;
                 return t;
             };
-            
             
             const printReceipt = (b) => {
                 if (navigator.share) navigator.share({ title: 'Receipt', text: getReceiptText(b) });
                 else { navigator.clipboard.writeText(getReceiptText(b)); alert("Receipt Copied!"); }
             };
 
-                        const exportData = (days) => {
+            // Excel Export (Fixed Backticks)
+            const exportData = (days) => {
                 const limit = new Date(Date.now() - (days * 24 * 3600 * 1000));
                 const filtered = txs.filter(t => new Date(t.date) > limit);
                 let csv = "Date,BillID,Customer,Mobile,Items,Total\n";
-                
                 filtered.forEach(t => {
                     const itemStr = t.items.map(i => `${i.qty}x ${i.name}`).join(' | ');
-                    // The line below uses backticks (`)
                     csv += `${new Date(t.date).toLocaleDateString()},${t.id},${t.customerName},${t.customerMobile},"${itemStr}",${t.total}\n`;
                 });
-
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
                 a.download = `Sales_${days}Days.csv`;
                 a.click();
             };
-            
 
+            // Autocomplete
             const handleCustInput = (val) => {
                 setCustData(prev => ({ ...prev, name: val }));
                 if (val.length > 1) {
@@ -344,7 +328,8 @@
                         {tab === 'orders' ? (
                             txs.filter(t => t.customerMobile === user.mobile).length === 0 ? <p className="text-center text-gray-400 mt-10">No orders yet.</p> :
                             txs.filter(t => t.customerMobile === user.mobile).slice().reverse().map(t => (
-                                <Card key={t.id} className="mb-3"><span className="text-green-600">₹{t.total}</span></div>
+                                <Card key={t.id} className="mb-3">
+                                    <div className="flex justify-between font-bold border-b pb-2 mb-2"><span>{new Date(t.date).toLocaleDateString()}</span><span className="text-green-600">₹{t.total}</span></div>
                                     <div className="text-sm text-gray-600 space-y-1">{t.items.map((i, idx) => <div key={idx}>{i.name} x{i.qty}</div>)}</div>
                                     <Btn variant="secondary" className="w-full mt-3 py-2 text-xs" onClick={() => printReceipt(t)}><Icon name="share-2" size={14}/> Share Receipt</Btn>
                                 </Card>
@@ -377,7 +362,7 @@
                                 ))}
                             </div>
                         )}
-                        {tab === 'settings' && (re
+                        {tab === 'settings' && (
                             <div className="space-y-4">
                                 <Card><h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Icon name="store"/> Shop Status</h3><div className="flex gap-2"><Btn onClick={() => db.ref('settings').update({status: 'OPEN'})} variant={shopInfo.status==='OPEN'?'green':'secondary'} className="flex-1">OPEN</Btn><Btn onClick={() => db.ref('settings').update({status: 'CLOSED'})} variant={shopInfo.status==='CLOSED'?'danger':'secondary'} className="flex-1">CLOSED</Btn></div></Card>
                                 <Card><h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Icon name="edit"/> Shop Details</h3><div className="space-y-3"><input className="w-full p-3 border rounded-lg" value={shopInfo.name} onChange={e => setShopInfo({...shopInfo, name: e.target.value})} placeholder="Name"/><input className="w-full p-3 border rounded-lg" value={shopInfo.address} onChange={e => setShopInfo({...shopInfo, address: e.target.value})} placeholder="Address"/><input className="w-full p-3 border rounded-lg" value={shopInfo.mobile} onChange={e => setShopInfo({...shopInfo, mobile: e.target.value})} placeholder="Mobile"/><input className="w-full p-3 border rounded-lg" value={shopInfo.email} onChange={e => setShopInfo({...shopInfo, email: e.target.value})} placeholder="Email"/><Btn onClick={() => db.ref('settings').set(shopInfo)}>Update Details</Btn></div></Card>
@@ -414,4 +399,3 @@
     </script>
 </body>
 </html>
-                                    <div className="flex justify-between font-bold border-b pb-2 mb-2"><span>{new Date(t.date).toLocaleDateString()}</span>
