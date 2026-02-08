@@ -3,8 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>Morya POS Pro</title>
-
+    <title>Morya POS Ultimate</title>
+    <meta name="theme-color" content="#2563eb">
+    
     <script src="https://cdn.tailwindcss.com"></script>
     <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
     <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
@@ -13,10 +14,10 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 
     <style>
-        body { background-color: #f8fafc; touch-action: manipulation; -webkit-tap-highlight-color: transparent; }
-        .invoice-font { font-family: 'Courier New', Courier, monospace; }
-        .animate-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
+        body { background: #f3f4f6; -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; font-family: sans-serif; }
+        ::-webkit-scrollbar { display: none; }
         @keyframes slideUp { from { transform: translateY(100%); } to { transform: translateY(0); } }
+        .animate-up { animation: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1); }
     </style>
 </head>
 <body>
@@ -27,347 +28,477 @@
         const { jsPDF } = window.jspdf;
 
         // --- Config ---
-        const ADMIN_MOBILE = "7083522162"; 
-        const STORAGE = { INV: "morya_inv_v3", TRANS: "morya_trans_v3", CUST: "morya_cust_v3" };
+        const ADMIN_MOBILE = "7083522162";
+        const SHOP = { name: "Morya Matching Centre", prop: "Prof. Kapil Shinde", mobile: "7083522162", address: "Nehru Nagar, Dhule" };
+        const STORAGE = { INV: "morya_final_inv", TRANS: "morya_final_txs", CUST: "morya_final_cust" };
 
-        // --- Components ---
-        const Icon = ({ name, size = 20, className }) => {
+        // --- UI Components ---
+        const Icon = ({ name, size = 20, className = "" }) => {
             useEffect(() => lucide.createIcons(), [name]);
             return <i data-lucide={name} width={size} height={size} className={className}></i>;
         };
 
-        const Button = ({ onClick, children, variant = "primary", className = "" }) => {
-            const styles = {
+        const Btn = ({ children, onClick, variant = "primary", className = "", ...props }) => {
+            const base = "px-4 py-3 rounded-xl font-bold active:scale-95 flex items-center justify-center gap-2 transition-all";
+            const variants = {
                 primary: "bg-blue-600 text-white shadow-lg shadow-blue-200",
-                secondary: "bg-gray-100 text-gray-800",
+                secondary: "bg-gray-100 text-gray-700 hover:bg-gray-200",
+                green: "bg-green-600 text-white shadow-lg shadow-green-200",
+                black: "bg-gray-900 text-white shadow-lg",
                 purple: "bg-purple-600 text-white shadow-lg shadow-purple-200",
-                success: "bg-green-600 text-white shadow-lg shadow-green-200"
+                danger: "bg-red-50 text-red-600"
             };
-            return (
-                <button onClick={onClick} className={`w-full py-3.5 rounded-xl font-bold flex justify-center items-center gap-2 active:scale-95 transition-all ${styles[variant]} ${className}`}>
-                    {children}
-                </button>
-            );
+            return <button onClick={onClick} className={`${base} ${variants[variant]} ${className}`} {...props}>{children}</button>;
         };
 
-        // --- Main App ---
+        const Card = ({ children, onClick, className = "" }) => (
+            <div onClick={onClick} className={`bg-white rounded-xl shadow-sm border border-gray-100 p-4 ${className}`}>{children}</div>
+        );
+
+        // --- Main App Logic ---
         const App = () => {
-            const [view, setView] = useState("auth"); 
+            const [view, setView] = useState("auth");
+            const [tab, setTab] = useState("pos");
+            const [userMobile, setUserMobile] = useState("");
+            
+            // Data State
             const [inventory, setInventory] = useState([]);
             const [cart, setCart] = useState([]);
             const [customers, setCustomers] = useState([]);
             const [transactions, setTransactions] = useState([]);
-            
-            // Temporary States
+
+            // Temp State
             const [activeModal, setActiveModal] = useState(null);
             const [selectedItem, setSelectedItem] = useState(null);
-            const [checkout, setCheckout] = useState({ mobile: "", name: "" });
-            const [suggestions, setSuggestions] = useState([]);
+            const [checkoutData, setCheckoutData] = useState({ mobile: "", name: "" });
+            const [custSuggestions, setCustSuggestions] = useState([]);
             const [lastBill, setLastBill] = useState(null);
 
             // Load Data
             useEffect(() => {
                 const load = (k, s, d) => {
                     const v = localStorage.getItem(k);
-                    if(v) s(JSON.parse(v));
+                    if (v) s(JSON.parse(v));
                     else { s(d); localStorage.setItem(k, JSON.stringify(d)); }
                 };
-                load(STORAGE.INV, setInventory, [{ id: 1, name: "Asther Fall", price: 350, type: "color", stock: {} }]);
-                load(STORAGE.CUST, setCustomers, []);
+                load(STORAGE.INV, setInventory, [{ id: '1', name: 'Asther Fall', price: 350, type: 'has_colors', stock: {} }]);
                 load(STORAGE.TRANS, setTransactions, []);
+                load(STORAGE.CUST, setCustomers, []);
             }, []);
+
+            // Save Data
+            useEffect(() => {
+                localStorage.setItem(STORAGE.INV, JSON.stringify(inventory));
+                localStorage.setItem(STORAGE.TRANS, JSON.stringify(transactions));
+                localStorage.setItem(STORAGE.CUST, JSON.stringify(customers));
+                if (window.lucide) window.lucide.createIcons();
+            }, [inventory, transactions, customers, view, tab, activeModal]);
 
             // --- Features ---
 
-            // 1. Smart Customer Search
-            const handleMobileInput = (val) => {
-                setCheckout(p => ({ ...p, mobile: val }));
-                if (val.length > 2) {
-                    const matches = customers.filter(c => c.mobile.includes(val) || c.name.toLowerCase().includes(val.toLowerCase()));
-                    setSuggestions(matches);
-                } else setSuggestions([]);
-            };
-
-            const pickCustomer = (c) => {
-                setCheckout({ mobile: c.mobile, name: c.name });
-                setSuggestions([]);
-            };
-
-            // 2. Quick Sale Logic
-            const handleQuickSale = () => {
-                const name = document.getElementById('qName').value;
-                const price = parseFloat(document.getElementById('qPrice').value);
-                const qty = parseInt(document.getElementById('qQty').value);
-
-                if(!name || !price || !qty) return alert("Fill all fields");
-
-                const newItem = {
-                    id: "QS-" + Date.now(), // Unique ID for quick sale
-                    name: name,
-                    price: price,
-                    type: "custom",
-                    qty: qty,
-                    total: price * qty,
-                    selectedColor: null
-                };
-                
-                setCart([...cart, newItem]);
-                setActiveModal(null);
-            };
-
-            // 3. Normal Add to Cart
-            const addToCart = (item, qty, color) => {
+            const addToCart = (item, qty, color, isCustom = false) => {
                 const q = parseInt(qty);
                 if (q <= 0) return;
-                setCart([...cart, { ...item, qty: q, selectedColor: color, total: item.price * q, cartId: Date.now() }]);
+                const newItem = { 
+                    ...item, 
+                    qty: q, 
+                    selectedColor: color, 
+                    total: item.price * q, 
+                    cartId: Date.now(),
+                    isCustom 
+                };
+                setCart([...cart, newItem]);
                 setActiveModal(null);
+                setSelectedItem(null);
             };
 
-            // 4. Checkout & Save
-            const finishSale = () => {
-                if(!checkout.mobile || !checkout.name) return alert("Customer details required");
+            const handleCustSearch = (val) => {
+                setCheckoutData(prev => ({ ...prev, mobile: val }));
+                if (val.length > 2) {
+                    const matches = customers.filter(c => c.mobile.includes(val) || c.name.toLowerCase().includes(val.toLowerCase()));
+                    setCustSuggestions(matches);
+                } else setCustSuggestions([]);
+            };
 
-                // Update Stock (Only for inventory items)
-                const newInv = inventory.map(inv => {
-                    const cartItems = cart.filter(c => c.id === inv.id);
-                    if(!cartItems.length) return inv;
-                    let s = inv.type === 'standard' ? inv.stock : {...inv.stock};
-                    cartItems.forEach(c => {
-                        if(inv.type === 'standard') s -= c.qty;
-                        else s[c.selectedColor] -= c.qty;
+            const finalizeSale = () => {
+                if (!checkoutData.mobile || !checkoutData.name) return alert("Customer Name & Mobile Required");
+
+                const newInv = inventory.map(p => {
+                    const sold = cart.filter(c => c.id === p.id);
+                    if (!sold.length) return p;
+                    let s = p.stock;
+                    let cs = { ...(p.colorStock || {}) };
+                    sold.forEach(c => {
+                        if (p.type === 'standard') s -= c.qty;
+                        else if (c.selectedColor) cs[c.selectedColor] = (cs[c.selectedColor] || 0) - c.qty;
                     });
-                    return {...inv, stock: s};
+                    return { ...p, stock: s, colorStock: cs };
                 });
 
-                // Save Customer
-                const existing = customers.find(c => c.mobile === checkout.mobile);
-                const newCusts = existing 
-                    ? customers.map(c => c.mobile === checkout.mobile ? {...c, name: checkout.name} : c)
-                    : [...customers, { mobile: checkout.mobile, name: checkout.name }];
+                const custExists = customers.find(c => c.mobile === checkoutData.mobile);
+                const newCusts = custExists 
+                    ? customers.map(c => c.mobile === checkoutData.mobile ? { ...c, name: checkoutData.name } : c)
+                    : [...customers, { mobile: checkoutData.mobile, name: checkoutData.name }];
 
-                // Save Bill
-                const bill = { id: Date.now(), date: new Date().toISOString(), customer: checkout, items: cart, total: cart.reduce((a,b)=>a+b.total,0) };
-                
+                const bill = {
+                    id: Date.now().toString(),
+                    date: new Date().toISOString(),
+                    customer: checkoutData,
+                    items: cart,
+                    total: cart.reduce((a, b) => a + b.total, 0)
+                };
+
                 setInventory(newInv);
                 setCustomers(newCusts);
-                setTransactions([bill, ...transactions]);
-                
-                // Persist
-                localStorage.setItem(STORAGE.INV, JSON.stringify(newInv));
-                localStorage.setItem(STORAGE.CUST, JSON.stringify(newCusts));
-                localStorage.setItem(STORAGE.TRANS, JSON.stringify([bill, ...transactions]));
-
+                setTransactions([...transactions, bill]);
                 setLastBill(bill);
                 setCart([]);
-                setCheckout({mobile:"", name:""});
+                setCheckoutData({ mobile: "", name: "" });
                 setActiveModal("receipt");
             };
 
-            // 5. PDF Generator
-            const generatePDF = (bill) => {
-                const doc = new jsPDF({ unit: 'mm', format: [58, 160] });
-                doc.setFont("courier", "bold"); doc.setFontSize(12);
-                doc.text("MORYA MATCHING", 29, 8, { align: "center" });
+            // --- NEW: PDF SHARING LOGIC ---
+            const shareBill = async (bill, method) => {
+                // 1. Generate PDF
+                const doc = new jsPDF({ unit: 'mm', format: [80, 200] });
+                doc.setFontSize(10); doc.setFont("helvetica", "bold");
+                doc.text("MORYA MATCHING", 40, 8, { align: 'center' });
+                doc.setFontSize(8); doc.setFont("helvetica", "normal");
+                doc.text(SHOP.prop, 40, 12, { align: 'center' });
+                doc.text(SHOP.mobile, 40, 16, { align: 'center' });
+                doc.line(5, 20, 75, 20);
                 
-                doc.setFontSize(8); doc.setFont("courier", "normal");
-                doc.text("Owner: " + ADMIN_MOBILE, 29, 13, { align: "center" });
-                doc.text("--------------------------------", 2, 17);
-                
-                doc.text(`Bill: ${bill.id.toString().slice(-4)}`, 2, 22);
-                doc.text(`Date: ${new Date(bill.date).toLocaleDateString()}`, 2, 26);
-                doc.text(`Cust: ${bill.customer.name}`, 2, 30);
-                doc.text(`Mob : ${bill.customer.mobile}`, 2, 34);
-                
-                doc.text("--------------------------------", 2, 38);
-                let y = 42;
+                let y = 25;
+                doc.text(`Bill: ${bill.id.slice(-4)}`, 5, y);
+                doc.text(new Date(bill.date).toLocaleDateString(), 75, y, { align: 'right' }); y += 5;
+                doc.text(`Cust: ${bill.customer.name}`, 5, y); y += 6;
+                doc.line(5, y, 75, y); y += 5;
                 
                 bill.items.forEach(i => {
-                    let n = i.name;
-                    if(i.type === 'custom') n = "*" + n; // Mark custom items
-                    if(i.selectedColor) n += ` (#${i.selectedColor})`;
-                    
-                    doc.text(n.substring(0, 20), 2, y);
-                    doc.text(`${i.qty} x ${i.price}`, 2, y+4);
-                    doc.text(i.total.toFixed(2), 56, y+4, { align: "right" });
-                    y += 9;
+                    let n = i.name + (i.selectedColor ? ` (#${i.selectedColor})` : '');
+                    if (i.isCustom) n = "*" + n;
+                    doc.text(n, 5, y);
+                    doc.text(`${i.qty} x ${i.price}`, 45, y);
+                    doc.text(String(i.total), 75, y, { align: 'right' }); y += 5;
                 });
                 
-                doc.text("--------------------------------", 2, y);
-                doc.setFontSize(12); doc.setFont("courier", "bold");
-                doc.text(`TOTAL: Rs.${bill.total}`, 56, y+6, { align: "right" });
-                
-                doc.save(`Bill_${bill.customer.name}.pdf`);
+                doc.line(5, y, 75, y); y += 5;
+                doc.setFontSize(12); doc.setFont("helvetica", "bold");
+                doc.text(`TOTAL: ${bill.total}`, 75, y, { align: 'right' });
+
+                // 2. Handle Sharing
+                if (method === 'print' || method === 'share') {
+                    // Create a File Object
+                    const pdfBlob = doc.output('blob');
+                    const file = new File([pdfBlob], `Bill_${bill.customer.name}.pdf`, { type: "application/pdf" });
+
+                    // Use Android Web Share API
+                    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                        try {
+                            await navigator.share({
+                                files: [file],
+                                title: 'Bill Invoice',
+                                text: `Invoice for ${bill.customer.name} - Total ₹${bill.total}`
+                            });
+                        } catch (error) {
+                            console.log('Sharing failed', error);
+                        }
+                    } else {
+                        // Fallback for old devices
+                        doc.save(`Bill_${bill.customer.name}.pdf`);
+                        alert("File saved! Open it to Print/Share.");
+                    }
+                }
             };
 
-            // --- Views ---
+            // --- VIEW RENDER ---
 
-            if(view === "auth") return (
+            if (view === "auth") return (
                 <div className="h-screen bg-blue-600 flex items-center justify-center p-6">
-                    <div className="bg-white p-8 rounded-2xl shadow-2xl w-full max-w-sm text-center">
-                        <div className="bg-blue-100 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600"><Icon name="store" size={32}/></div>
-                        <h1 className="text-2xl font-bold mb-6">Morya POS</h1>
-                        <input type="tel" placeholder="Enter Mobile" className="w-full text-center text-xl p-3 border rounded-xl bg-gray-50 tracking-widest mb-4"
+                    <Card className="w-full max-w-sm text-center py-10">
+                        <div className="bg-blue-50 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4 text-blue-600">
+                            <Icon name="store" size={32} />
+                        </div>
+                        <h1 className="text-2xl font-extrabold text-blue-700">Morya POS</h1>
+                        <p className="text-gray-400 text-sm mb-8">Login to Shop</p>
+                        
+                        <input 
+                            type="tel" 
+                            placeholder="Enter Mobile Number" 
+                            className="w-full p-4 bg-gray-50 border rounded-xl text-center text-xl tracking-widest mb-4 outline-blue-500 font-bold"
                             onChange={(e) => {
-                                if(e.target.value.length === 10) {
-                                    if(e.target.value === ADMIN_MOBILE) setView("admin");
-                                    else setView("customer"); // Basic customer view logic omitted for brevity
+                                const val = e.target.value;
+                                if(val.length === 10) {
+                                    setUserMobile(val);
+                                    if (val === ADMIN_MOBILE) {
+                                        // Simple OTP Simulation for Admin
+                                        const pin = prompt("Enter Admin PIN (Demo: 1234)");
+                                        if (pin === "1234") setView("admin");
+                                        else alert("Wrong PIN");
+                                    } else {
+                                        // Direct Login for Customers
+                                        setView("customer");
+                                    }
                                 }
                             }}
                         />
-                        <p className="text-gray-400 text-xs">Admin: {ADMIN_MOBILE}</p>
+                        <p className="text-xs text-gray-300">Owner: {ADMIN_MOBILE}</p>
+                    </Card>
+                </div>
+            );
+
+            if (view === "customer") return (
+                <div className="min-h-screen bg-gray-50 pb-20">
+                    <div className="bg-blue-600 p-6 text-white rounded-b-3xl shadow-lg mb-4">
+                        <h1 className="text-2xl font-bold">Morya Matching</h1>
+                        <p className="opacity-80 text-sm">Welcome, Customer</p>
+                    </div>
+                    <div className="px-4">
+                        <h3 className="font-bold text-gray-800 mb-3">Your Purchase History</h3>
+                        {transactions.filter(t => t.customer.mobile === userMobile).length === 0 ? (
+                            <div className="text-center py-10 text-gray-400">
+                                <Icon name="shopping-bag" className="mx-auto mb-2 opacity-50"/>
+                                <p>No orders found for {userMobile}</p>
+                            </div>
+                        ) : (
+                            transactions.filter(t => t.customer.mobile === userMobile).slice().reverse().map(t => (
+                                <Card key={t.id} className="mb-3">
+                                    <div className="flex justify-between font-bold border-b pb-2 mb-2">
+                                        <span>{new Date(t.date).toLocaleDateString()}</span>
+                                        <span className="text-green-600">₹{t.total}</span>
+                                    </div>
+                                    {t.items.map((i, idx) => (
+                                        <div key={idx} className="flex justify-between text-sm text-gray-600">
+                                            <span>{i.name} x{i.qty}</span>
+                                            <span>{i.total}</span>
+                                        </div>
+                                    ))}
+                                    <Btn variant="secondary" className="w-full mt-3 py-2 text-xs" onClick={() => shareBill(t, 'share')}>
+                                        <Icon name="download" size={14}/> Download Bill
+                                    </Btn>
+                                </Card>
+                            ))
+                        )}
+                        <button onClick={() => setView("auth")} className="mt-8 w-full py-3 text-gray-400">Log Out</button>
                     </div>
                 </div>
             );
 
-            if(view === "admin") return (
-                <div className="min-h-screen pb-32">
+            if (view === "admin") return (
+                <div className="flex flex-col h-screen w-full bg-gray-50 text-gray-900">
                     {/* Header */}
-                    <div className="bg-white p-4 shadow sticky top-0 z-20 flex justify-between items-center">
-                        <h1 className="font-bold text-lg text-gray-800 flex items-center gap-2">
-                            <Icon name="layout-dashboard" className="text-blue-600"/> Dashboard
+                    <div className="bg-white p-4 shadow-sm z-30 sticky top-0 flex justify-between items-center">
+                        <h1 className="text-xl font-extrabold text-blue-700 flex items-center gap-2">
+                            <Icon name="layout-dashboard" className="text-blue-600" size={20}/> Dashboard
                         </h1>
-                        <button onClick={()=>setView("auth")} className="p-2 bg-gray-100 rounded-full"><Icon name="log-out" size={18}/></button>
+                        <div className="flex gap-2">
+                            {tab === 'pos' && <Btn onClick={() => setActiveModal("quick")} variant="purple" className="py-2 h-9 text-xs"><Icon name="zap" size={14}/> Quick</Btn>}
+                            <button onClick={() => setView("auth")} className="p-2 bg-gray-100 rounded-full"><Icon name="log-out" size={18} /></button>
+                        </div>
                     </div>
 
-                    {/* Quick Actions */}
-                    <div className="p-4">
-                        <Button variant="purple" onClick={()=>setActiveModal("quickSale")}>
-                            <Icon name="zap" className="text-yellow-300 fill-yellow-300"/> Quick Sale (Custom Item)
-                        </Button>
-                    </div>
-
-                    {/* Inventory Grid */}
-                    <div className="px-4 grid grid-cols-2 gap-3">
-                        {inventory.map(item => (
-                            <div key={item.id} onClick={() => { setSelectedItem(item); setActiveModal("add"); }}
-                                className="bg-white p-4 rounded-xl border border-gray-200 shadow-sm active:scale-95 transition-transform relative overflow-hidden">
-                                <div className="absolute top-0 right-0 bg-blue-100 text-blue-600 px-2 py-1 text-[10px] font-bold rounded-bl-lg">#{item.id}</div>
-                                <h3 className="font-bold text-gray-800 mt-2">{item.name}</h3>
-                                <p className="text-blue-600 font-bold mt-1">₹{item.price}</p>
+                    {/* Content */}
+                    <div className="flex-1 overflow-y-auto p-4 pb-48">
+                        {/* POS Tab */}
+                        {tab === 'pos' && (
+                            <div className="space-y-3">
+                                {inventory.map(p => (
+                                    <Card key={p.id} className="flex justify-between items-center active:scale-[0.99] transition-transform">
+                                        <div onClick={() => { setSelectedItem(p); setActiveModal("add"); }} className="flex-1">
+                                            <div className="font-bold text-lg">{p.name}</div>
+                                            <div className="text-xs text-gray-400">Stock: {p.type === 'standard' ? p.stock : Object.values(p.colorStock || {}).reduce((a,b)=>a+b,0)}</div>
+                                        </div>
+                                        <div className="flex flex-col items-end gap-1">
+                                            <span className="font-bold text-xl text-blue-700">₹{p.price}</span>
+                                            <Btn onClick={() => { setSelectedItem(p); setActiveModal("add"); }} className="py-1 px-4 text-xs h-8">
+                                                {p.type === 'has_colors' ? 'Color' : 'Add'}
+                                            </Btn>
+                                        </div>
+                                    </Card>
+                                ))}
+                                <Btn variant="secondary" onClick={() => { setSelectedItem({ name: '', price: '', type: 'standard', stock: 0 }); setActiveModal("edit"); }} className="w-full border-dashed border-2">
+                                    <Icon name="plus"/> Add New Item
+                                </Btn>
                             </div>
+                        )}
+
+                        {/* History Tab */}
+                        {tab === 'history' && (
+                            <div className="space-y-3">
+                                <Card className="bg-gradient-to-r from-blue-600 to-blue-800 text-white border-none">
+                                    <div className="text-sm opacity-80">Total Revenue</div>
+                                    <div className="text-3xl font-bold">₹{transactions.reduce((s, t) => s + t.total, 0)}</div>
+                                </Card>
+                                {transactions.slice().reverse().map(t => (
+                                    <Card key={t.id} onClick={() => { setLastBill(t); setActiveModal("receipt"); }}>
+                                        <div className="flex justify-between font-bold">
+                                            <span>{t.customer.name}</span>
+                                            <span className="text-green-600">₹{t.total}</span>
+                                        </div>
+                                        <div className="text-xs text-gray-400 mt-1">#{t.id.slice(-4)} • {new Date(t.date).toLocaleDateString()}</div>
+                                    </Card>
+                                ))}
+                            </div>
+                        )}
+                    </div>
+
+                    {/* Floating Checkout */}
+                    {cart.length > 0 && tab === 'pos' && (
+                        <div onClick={() => setActiveModal("checkout")} className="fixed bottom-24 left-4 right-4 bg-gray-900 text-white p-4 rounded-2xl shadow-2xl flex justify-between items-center z-40 animate-up cursor-pointer">
+                            <div className="flex items-center gap-3">
+                                <span className="bg-gray-700 px-3 py-1 rounded-lg font-bold">{cart.reduce((s, i) => s + i.qty, 0)}</span>
+                                <span className="font-bold text-xl">₹{cart.reduce((a, b) => a + b.total, 0)}</span>
+                            </div>
+                            <div className="flex items-center gap-2 font-bold text-blue-300">Checkout <Icon name="arrow-right" /></div>
+                        </div>
+                    )}
+
+                    {/* Navigation */}
+                    <div className="bg-white border-t h-20 flex justify-around items-center z-50 absolute bottom-0 w-full pb-2">
+                        {['pos', 'history'].map(t => (
+                            <button key={t} onClick={() => setTab(t)} className={`flex flex-col items-center w-full py-2 ${tab === t ? 'text-blue-600' : 'text-gray-400'}`}>
+                                <Icon name={t === 'pos' ? 'smartphone' : 'history'} />
+                                <span className="text-[10px] font-bold mt-1 uppercase">{t === 'pos' ? 'Sale' : t}</span>
+                            </button>
                         ))}
                     </div>
 
-                    {/* Floating Cart */}
-                    {cart.length > 0 && (
-                        <div onClick={()=>setActiveModal("checkout")} className="fixed bottom-6 left-4 right-4 bg-gray-900 text-white p-4 rounded-2xl shadow-2xl flex justify-between items-center z-30 animate-up">
-                            <div className="flex items-center gap-3">
-                                <span className="bg-blue-500 w-10 h-10 rounded-full flex items-center justify-center font-bold">{cart.length}</span>
-                                <div><p className="text-xs text-gray-400">Total Bill</p><p className="font-bold text-xl">₹{cart.reduce((a,b)=>a+b.total,0)}</p></div>
-                            </div>
-                            <div className="flex items-center gap-2 font-bold text-blue-300">Checkout <Icon name="arrow-right"/></div>
-                        </div>
-                    )}
-
-                    {/* --- Modals --- */}
+                    {/* --- MODALS --- */}
                     
-                    {/* 1. Quick Sale Modal */}
-                    {activeModal === "quickSale" && (
-                        <div className="fixed inset-0 bg-black/80 z-50 flex items-end justify-center">
-                            <div className="bg-white w-full max-w-md rounded-t-2xl p-6 animate-up">
-                                <div className="flex justify-between items-center mb-6">
-                                    <h2 className="font-bold text-xl flex gap-2 items-center"><Icon name="zap" className="text-purple-600"/> Quick Sale</h2>
-                                    <button onClick={()=>setActiveModal(null)}><Icon name="x"/></button>
-                                </div>
-                                <div className="space-y-4">
-                                    <input id="qName" placeholder="Item Name (e.g. Saree Fall)" className="w-full p-4 border rounded-xl bg-gray-50"/>
-                                    <div className="grid grid-cols-2 gap-4">
-                                        <input id="qPrice" type="number" placeholder="Price (₹)" className="w-full p-4 border rounded-xl bg-gray-50"/>
-                                        <input id="qQty" type="number" defaultValue="1" placeholder="Qty" className="w-full p-4 border rounded-xl bg-gray-50"/>
-                                    </div>
-                                    <Button variant="purple" onClick={handleQuickSale}>Add to Bill</Button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* 2. Inventory Add Modal */}
+                    {/* Add Item Modal */}
                     {activeModal === "add" && selectedItem && (
-                        <div className="fixed inset-0 bg-black/80 z-50 flex items-end justify-center">
-                            <div className="bg-white w-full max-w-md rounded-t-2xl p-6 animate-up">
-                                <h2 className="font-bold text-xl mb-4">{selectedItem.name}</h2>
-                                {selectedItem.type === 'color' && <input id="cColor" type="number" placeholder="Color Number (e.g. 101)" className="w-full p-4 border rounded-xl mb-3 bg-gray-50"/>}
-                                <input id="cQty" type="number" defaultValue="1" className="w-full p-4 border rounded-xl mb-4 bg-gray-50"/>
-                                <Button onClick={() => {
-                                    const col = document.getElementById('cColor')?.value;
-                                    const qty = document.getElementById('cQty').value;
-                                    if(selectedItem.type === 'color' && !col) return alert("Enter Color!");
-                                    addToCart(selectedItem, qty, col);
-                                }}>Add Item</Button>
+                        <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white w-full max-w-xs rounded-2xl p-6 relative animate-up">
+                                <button onClick={() => setActiveModal(null)} className="absolute right-4 top-4 bg-gray-100 p-2 rounded-full"><Icon name="x" /></button>
+                                <h3 className="text-xl font-bold mb-1">{selectedItem.name}</h3>
+                                {selectedItem.type === 'has_colors' && (
+                                    <input id="modColor" type="number" className="w-full text-center text-xl font-bold p-3 bg-gray-100 rounded-xl mb-3" placeholder="Color Number" autoFocus />
+                                )}
+                                <div className="flex items-center gap-3 mb-4">
+                                    <label className="text-gray-500 text-sm font-bold">Qty:</label>
+                                    <input id="modQty" type="number" defaultValue="1" className="flex-1 text-center text-2xl font-bold p-3 bg-gray-100 rounded-xl" />
+                                </div>
+                                <Btn onClick={() => {
+                                    const c = document.getElementById('modColor')?.value;
+                                    const q = document.getElementById('modQty').value;
+                                    if(selectedItem.type === 'has_colors' && !c) return alert("Enter Color");
+                                    addToCart(selectedItem, q, c);
+                                }} className="w-full text-lg">ADD</Btn>
                             </div>
                         </div>
                     )}
 
-                    {/* 3. Checkout Modal */}
-                    {activeModal === "checkout" && (
-                        <div className="fixed inset-0 bg-white z-50 flex flex-col">
-                            <div className="p-4 border-b flex justify-between items-center">
-                                <h2 className="font-bold text-lg">Checkout</h2>
-                                <button onClick={()=>setActiveModal(null)} className="p-2 bg-gray-100 rounded-full"><Icon name="x"/></button>
-                            </div>
-                            <div className="flex-1 p-4 overflow-y-auto">
-                                {/* Search Customer */}
-                                <div className="mb-6 relative">
-                                    <label className="text-xs font-bold text-gray-500 uppercase">Customer Mobile</label>
-                                    <div className="relative">
-                                        <input type="tel" value={checkout.mobile} onChange={e=>handleMobileInput(e.target.value)} 
-                                            placeholder="Start typing mobile..." className="w-full p-4 pl-12 border rounded-xl bg-blue-50 font-mono text-lg font-bold"/>
-                                        <Icon name="search" className="absolute left-4 top-4 text-gray-400" size={20}/>
+                    {/* Quick Sale Modal */}
+                    {activeModal === "quick" && (
+                        <div className="fixed inset-0 bg-black/80 z-[60] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white w-full max-w-xs rounded-2xl p-6 animate-up">
+                                <h3 className="text-xl font-bold mb-4 flex items-center gap-2"><Icon name="zap" className="text-yellow-500 fill-yellow-500"/> Quick Sale</h3>
+                                <div className="space-y-3">
+                                    <input id="qName" className="w-full p-3 bg-gray-50 rounded-xl" placeholder="Item Name"/>
+                                    <div className="flex gap-2">
+                                        <input id="qPrice" type="number" className="w-full p-3 bg-gray-50 rounded-xl" placeholder="Price"/>
+                                        <input id="qQty" type="number" defaultValue="1" className="w-full p-3 bg-gray-50 rounded-xl" placeholder="Qty"/>
                                     </div>
-                                    {/* Auto-Complete Dropdown */}
-                                    {suggestions.length > 0 && (
-                                        <div className="absolute top-full left-0 right-0 bg-white shadow-xl border rounded-xl mt-2 z-20 max-h-48 overflow-y-auto">
-                                            {suggestions.map(s => (
-                                                <div key={s.mobile} onClick={()=>pickCustomer(s)} className="p-4 border-b hover:bg-gray-50 flex justify-between items-center">
-                                                    <span className="font-bold">{s.name}</span>
-                                                    <span className="text-gray-400 text-sm">{s.mobile}</span>
+                                    <Btn variant="purple" className="w-full" onClick={() => {
+                                        const n = document.getElementById('qName').value;
+                                        const p = document.getElementById('qPrice').value;
+                                        const q = document.getElementById('qQty').value;
+                                        if(!n || !p) return;
+                                        addToCart({name: n, price: p}, q, null, true);
+                                    }}>Add Custom Item</Btn>
+                                    <Btn variant="secondary" className="w-full" onClick={() => setActiveModal(null)}>Cancel</Btn>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Edit Item Modal */}
+                    {activeModal === "edit" && selectedItem && (
+                        <div className="fixed inset-0 bg-black/50 z-[70] flex items-center justify-center p-4 backdrop-blur-sm">
+                            <div className="bg-white w-full max-w-sm rounded-2xl p-6 shadow-2xl">
+                                <h3 className="text-xl font-bold mb-4">{selectedItem.id ? 'Edit Item' : 'New Item'}</h3>
+                                <div className="space-y-3">
+                                    <select className="w-full p-3 border rounded-lg bg-white" value={selectedItem.type} onChange={e => setSelectedItem({...selectedItem, type: e.target.value})}>
+                                        <option value="standard">Standard Stock</option>
+                                        <option value="has_colors">Color Tracked</option>
+                                    </select>
+                                    <input className="w-full p-3 border rounded-lg" placeholder="Name" value={selectedItem.name} onChange={e => setSelectedItem({...selectedItem, name: e.target.value})} />
+                                    <div className="flex gap-2">
+                                        <input type="number" className="w-full p-3 border rounded-lg" placeholder="Price" value={selectedItem.price} onChange={e => setSelectedItem({...selectedItem, price: parseInt(e.target.value)})} />
+                                        <input type="number" className="w-full p-3 border rounded-lg" placeholder="Stock" value={selectedItem.stock} onChange={e => setSelectedItem({...selectedItem, stock: parseInt(e.target.value)})} />
+                                    </div>
+                                    <div className="flex gap-2 mt-4">
+                                        <Btn variant="secondary" className="flex-1" onClick={() => setActiveModal(null)}>Cancel</Btn>
+                                        <Btn className="flex-1" onClick={() => {
+                                            const newItem = { ...selectedItem, id: selectedItem.id || Date.now().toString() };
+                                            if(selectedItem.id) setInventory(inventory.map(i => i.id === newItem.id ? newItem : i));
+                                            else setInventory([...inventory, newItem]);
+                                            setActiveModal(null);
+                                        }}>Save</Btn>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Checkout Modal */}
+                    {activeModal === "checkout" && (
+                        <div className="fixed inset-0 bg-black/50 z-[60] flex items-end justify-center backdrop-blur-sm">
+                            <div className="bg-white w-full max-w-md rounded-t-3xl p-6 h-[85vh] flex flex-col animate-up shadow-2xl">
+                                <div className="flex justify-between items-center mb-4">
+                                    <h2 className="text-2xl font-bold">Checkout</h2>
+                                    <button onClick={() => setActiveModal(null)}><Icon name="x" /></button>
+                                </div>
+                                <div className="flex-1 overflow-y-auto space-y-4 mb-4">
+                                    {cart.map(i => (
+                                        <div key={i.cartId} className="flex justify-between items-center border-b pb-2">
+                                            <div>
+                                                <div className="font-bold">{i.name} {i.selectedColor && <span className="text-blue-600 bg-blue-50 px-1 rounded">#{i.selectedColor}</span>}</div>
+                                                <div className="text-xs text-gray-400">₹{i.price} x {i.qty}</div>
+                                            </div>
+                                            <div className="flex items-center gap-3">
+                                                <div className="font-bold">₹{i.total}</div>
+                                                <button onClick={() => setCart(cart.filter(x => x.cartId !== i.cartId))} className="text-red-500"><Icon name="trash-2" size={16} /></button>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                                <div className="space-y-3 pt-4 border-t relative">
+                                    <input type="tel" placeholder="Customer Mobile" className="w-full p-3 bg-blue-50 border border-blue-100 rounded-xl font-bold text-lg"
+                                        value={checkoutData.mobile} onChange={e => handleCustSearch(e.target.value)} />
+                                    {custSuggestions.length > 0 && (
+                                        <div className="absolute bottom-full left-0 w-full bg-white shadow-xl border rounded-xl mb-2 max-h-40 overflow-y-auto z-50">
+                                            {custSuggestions.map(c => (
+                                                <div key={c.mobile} onClick={() => { setCheckoutData({ mobile: c.mobile, name: c.name }); setCustSuggestions([]); }} className="p-3 border-b hover:bg-gray-50 flex justify-between">
+                                                    <span className="font-bold">{c.name}</span><span className="text-gray-400">{c.mobile}</span>
                                                 </div>
                                             ))}
                                         </div>
                                     )}
-                                    <input placeholder="Customer Name" value={checkout.name} onChange={e=>setCheckout({...checkout, name: e.target.value})} className="w-full p-4 border rounded-xl mt-3"/>
+                                    <input className="w-full p-3 bg-gray-50 rounded-xl" placeholder="Customer Name"
+                                        value={checkoutData.name} onChange={e => setCheckoutData({...checkoutData, name: e.target.value})} />
+                                    <Btn variant="black" className="w-full py-4 text-lg" onClick={finalizeSale}>PAY ₹{cart.reduce((a, b) => a + b.total, 0)}</Btn>
                                 </div>
-
-                                {/* Cart List */}
-                                <div className="space-y-3">
-                                    {cart.map((item, idx) => (
-                                        <div key={idx} className="flex justify-between items-center bg-gray-50 p-3 rounded-lg border">
-                                            <div>
-                                                <p className="font-bold text-gray-800">{item.name}</p>
-                                                <p className="text-xs text-gray-500">{item.qty} x ₹{item.price} {item.selectedColor && `(#${item.selectedColor})`}</p>
-                                            </div>
-                                            <p className="font-bold">₹{item.total}</p>
-                                        </div>
-                                    ))}
-                                </div>
-                            </div>
-                            <div className="p-4 border-t bg-white">
-                                <Button onClick={finishSale} variant="success">CONFIRM & PRINT</Button>
                             </div>
                         </div>
                     )}
 
-                    {/* 4. Receipt Success Modal */}
+                    {/* Receipt Success (With Share Fix) */}
                     {activeModal === "receipt" && lastBill && (
-                        <div className="fixed inset-0 bg-black/90 z-50 flex items-center justify-center p-6">
-                            <div className="bg-white w-full max-w-sm rounded-2xl overflow-hidden animate-up">
-                                <div className="bg-green-500 p-6 text-center text-white">
-                                    <div className="bg-white/20 w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-3"><Icon name="check" size={32}/></div>
-                                    <h2 className="font-bold text-2xl">Sale Done!</h2>
+                        <div className="fixed inset-0 bg-gray-900/95 z-[70] flex items-center justify-center p-4">
+                            <div className="bg-white w-full max-w-sm rounded-2xl p-6 text-center shadow-2xl animate-up">
+                                <div className="w-16 h-16 bg-green-100 text-green-600 rounded-full flex items-center justify-center mx-auto mb-4"><Icon name="check" size={32} /></div>
+                                <h2 className="text-2xl font-bold mb-1">Sale Done!</h2>
+                                <p className="text-gray-500 mb-6 font-mono text-lg">₹{lastBill.total}</p>
+                                <div className="space-y-3">
+                                    <Btn variant="black" className="w-full py-4" onClick={() => shareBill(lastBill, 'print')}>
+                                        <Icon name="printer" /> Print via RawBT
+                                    </Btn>
+                                    <Btn variant="green" className="w-full py-4" onClick={() => shareBill(lastBill, 'share')}>
+                                        <Icon name="share-2" /> Share PDF (WhatsApp)
+                                    </Btn>
                                 </div>
-                                <div className="p-6 space-y-3">
-                                    <p className="text-center text-gray-500 mb-4">Invoice #{lastBill.id.toString().slice(-4)}</p>
-                                    <Button variant="secondary" onClick={()=>generatePDF(lastBill)}>
-                                        <Icon name="printer" className="text-gray-600"/> Download PDF Bill
-                                    </Button>
-                                    <Button variant="secondary" onClick={()=>{
-                                        const msg = `*Morya Matching Invoice* %0AHello ${lastBill.customer.name}, %0AAmount: ₹${lastBill.total}. %0AThank you!`;
-                                        window.open(`https://wa.me/91${lastBill.customer.mobile}?text=${msg}`);
-                                    }}>
-                                        <Icon name="message-circle" className="text-green-600"/> WhatsApp Bill
-                                    </Button>
-                                    <Button variant="primary" onClick={()=>setActiveModal(null)}>New Sale</Button>
-                                </div>
+                                <button onClick={() => setActiveModal(null)} className="mt-6 text-gray-400 text-sm underline">Close</button>
                             </div>
                         </div>
                     )}
