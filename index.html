@@ -212,32 +212,56 @@
                 setLastBill(bill); setCart([]); setActiveModal("receipt");
             };
 
+                        // --- TEXT RECEIPT GENERATOR ---
             const getReceiptText = (b) => {
-                let t = `   *${shopInfo.name}*\n   ${shopInfo.prop}\n   ${shopInfo.mobile}\n   ${shopInfo.address}\n`;
-                t += `--------------------------------\nBill: ${b.id.slice(-6)}\nDate: ${new Date(b.date).toLocaleDateString()}\nCust: ${b.customerName}\n--------------------------------\n`;
-                b.items.forEach(i => t += `${(i.name).padEnd(12)} ${String(i.qty).padStart(2)}  ${String(i.price*i.qty).padStart(6)}\n`);
-                t += `--------------------------------\nTOTAL:        Rs. ${b.total}\n--------------------------------\n No Exchange | No Refund\n   Thank You!\n`;
+                let t = `   *${shopInfo.name}*\n`;
+                t += `   ${shopInfo.prop}\n`;
+                t += `   ${shopInfo.mobile}\n`;
+                t += `   ${shopInfo.address}\n`;
+                t += `--------------------------------\n`;
+                t += `Bill: ${b.id.slice(-6)}\n`;
+                t += `Date: ${new Date(b.date).toLocaleDateString()}\n`;
+                t += `Cust: ${b.customerName} (${b.customerMobile})\n`;
+                t += `--------------------------------\n`;
+                t += `ITEM          QTY    PRICE\n`;
+                b.items.forEach(i => {
+                    let n = i.name + (i.variant !== 'Std' ? `(${i.variant})` : '');
+                    n = n.length > 12 ? n.substring(0, 12) + ".." : n.padEnd(14, ' ');
+                    let q = String(i.qty).padStart(3, ' ');
+                    let p = String(i.price * i.qty).padStart(7, ' ');
+                    t += `${n}${q}${p}\n`;
+                });
+                t += `--------------------------------\n`;
+                t += `TOTAL:        Rs. ${b.total}\n`;
+                t += `--------------------------------\n`;
+                t += ` No Exchange | No Refund\n`;
+                t += `   Thank You for Visiting!\n`;
                 return t;
             };
+            
             
             const printReceipt = (b) => {
                 if (navigator.share) navigator.share({ title: 'Receipt', text: getReceiptText(b) });
                 else { navigator.clipboard.writeText(getReceiptText(b)); alert("Receipt Copied!"); }
             };
 
-            const exportData = (days) => {
+                        const exportData = (days) => {
                 const limit = new Date(Date.now() - (days * 24 * 3600 * 1000));
                 const filtered = txs.filter(t => new Date(t.date) > limit);
                 let csv = "Date,BillID,Customer,Mobile,Items,Total\n";
+                
                 filtered.forEach(t => {
                     const itemStr = t.items.map(i => `${i.qty}x ${i.name}`).join(' | ');
+                    // The line below uses backticks (`)
                     csv += `${new Date(t.date).toLocaleDateString()},${t.id},${t.customerName},${t.customerMobile},"${itemStr}",${t.total}\n`;
                 });
+
                 const a = document.createElement('a');
                 a.href = URL.createObjectURL(new Blob([csv], { type: 'text/csv' }));
                 a.download = `Sales_${days}Days.csv`;
                 a.click();
             };
+            
 
             const handleCustInput = (val) => {
                 setCustData(prev => ({ ...prev, name: val }));
@@ -353,7 +377,7 @@
                                 ))}
                             </div>
                         )}
-                        {tab === 'settings' && (
+                        {tab === 'settings' && (re
                             <div className="space-y-4">
                                 <Card><h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Icon name="store"/> Shop Status</h3><div className="flex gap-2"><Btn onClick={() => db.ref('settings').update({status: 'OPEN'})} variant={shopInfo.status==='OPEN'?'green':'secondary'} className="flex-1">OPEN</Btn><Btn onClick={() => db.ref('settings').update({status: 'CLOSED'})} variant={shopInfo.status==='CLOSED'?'danger':'secondary'} className="flex-1">CLOSED</Btn></div></Card>
                                 <Card><h3 className="font-bold text-lg mb-4 flex items-center gap-2"><Icon name="edit"/> Shop Details</h3><div className="space-y-3"><input className="w-full p-3 border rounded-lg" value={shopInfo.name} onChange={e => setShopInfo({...shopInfo, name: e.target.value})} placeholder="Name"/><input className="w-full p-3 border rounded-lg" value={shopInfo.address} onChange={e => setShopInfo({...shopInfo, address: e.target.value})} placeholder="Address"/><input className="w-full p-3 border rounded-lg" value={shopInfo.mobile} onChange={e => setShopInfo({...shopInfo, mobile: e.target.value})} placeholder="Mobile"/><input className="w-full p-3 border rounded-lg" value={shopInfo.email} onChange={e => setShopInfo({...shopInfo, email: e.target.value})} placeholder="Email"/><Btn onClick={() => db.ref('settings').set(shopInfo)}>Update Details</Btn></div></Card>
