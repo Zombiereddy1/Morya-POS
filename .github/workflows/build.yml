@@ -3,7 +3,7 @@ name: Build Morya POS APK
 on:
   push:
     branches: [ "main", "master" ]
-  workflow_dispatch:      # Allows you to click a button to build manually
+  workflow_dispatch:
 
 jobs:
   build-android:
@@ -29,26 +29,30 @@ jobs:
 
       - name: Create Cordova Project
         run: |
-          # Create a new Cordova project named "MoryaPOS"
+          # Create a new Cordova project
           cordova create morya-app com.morya.pos "Morya POS"
           
           # Add Android platform
           cd morya-app
           cordova platform add android
           
-          # IMPORTANT: We need to enable internet permissions for the app
-          # This replaces the default config with one that allows navigation
+          # Replace config.xml with one that allows navigation (Internet Access)
           echo '<?xml version="1.0" encoding="utf-8"?><widget id="com.morya.pos" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0"><name>Morya POS</name><description>Morya Matching Centre POS</description><author email="morya@example.com" href="http://example.com">Morya Team</author><content src="index.html" /><access origin="*" /><allow-intent href="http://*/*" /><allow-intent href="https://*/*" /><allow-intent href="tel:*" /><allow-intent href="sms:*" /><allow-intent href="mailto:*" /><allow-intent href="geo:*" /></widget>' > config.xml
 
       - name: Inject Your App Code
         run: |
-          # Remove default cordova "Hello World" files
+          # 1. Clean the default folder
           rm -rf morya-app/www/*
           
-          # Copy YOUR index.html into the app folder
+          # 2. Re-create the necessary folders (THIS WAS MISSING)
+          mkdir -p morya-app/www/js
+          mkdir -p morya-app/www/css
+          mkdir -p morya-app/www/img
+          
+          # 3. Copy your index.html into the app
           cp index.html morya-app/www/
           
-          # Create a simple JS file if it doesn't exist (Cordova needs it sometimes)
+          # 4. Create a dummy JS file to satisfy Cordova requirements
           touch morya-app/www/js/index.js
 
       - name: Build APK (Debug Version)
