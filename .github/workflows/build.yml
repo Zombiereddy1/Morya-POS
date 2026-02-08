@@ -1,0 +1,64 @@
+name: Build Morya POS APK
+
+on:
+  push:
+    branches: [ "main", "master" ]
+  workflow_dispatch:      # Allows you to click a button to build manually
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Setup Java
+        uses: actions/setup-java@v3
+        with:
+          distribution: 'temurin'
+          java-version: '17'
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+
+      - name: Install Cordova
+        run: npm install -g cordova
+
+      - name: Create Cordova Project
+        run: |
+          # Create a new Cordova project named "MoryaPOS"
+          cordova create morya-app com.morya.pos "Morya POS"
+          
+          # Add Android platform
+          cd morya-app
+          cordova platform add android
+          
+          # IMPORTANT: We need to enable internet permissions for the app
+          # This replaces the default config with one that allows navigation
+          echo '<?xml version="1.0" encoding="utf-8"?><widget id="com.morya.pos" version="1.0.0" xmlns="http://www.w3.org/ns/widgets" xmlns:cdv="http://cordova.apache.org/ns/1.0"><name>Morya POS</name><description>Morya Matching Centre POS</description><author email="morya@example.com" href="http://example.com">Morya Team</author><content src="index.html" /><access origin="*" /><allow-intent href="http://*/*" /><allow-intent href="https://*/*" /><allow-intent href="tel:*" /><allow-intent href="sms:*" /><allow-intent href="mailto:*" /><allow-intent href="geo:*" /></widget>' > config.xml
+
+      - name: Inject Your App Code
+        run: |
+          # Remove default cordova "Hello World" files
+          rm -rf morya-app/www/*
+          
+          # Copy YOUR index.html into the app folder
+          cp index.html morya-app/www/
+          
+          # Create a simple JS file if it doesn't exist (Cordova needs it sometimes)
+          touch morya-app/www/js/index.js
+
+      - name: Build APK (Debug Version)
+        run: |
+          cd morya-app
+          cordova build android --debug
+          
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Morya-POS-App
+          path: morya-app/platforms/android/app/build/outputs/apk/debug/app-debug.apk
+          
