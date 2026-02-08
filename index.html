@@ -24,25 +24,38 @@
     <div id="root"></div>
 
     <script type="module">
+        // Using GSTATIC imports which work in Browser/Acode without building
         import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js";
         import { getDatabase, ref, set, onValue } from "https://www.gstatic.com/firebasejs/10.7.1/firebase-database.js";
 
-        // --- PASTE YOUR FIREBASE CONFIG HERE ---
+        // --- YOUR CONFIGURATION ---
         const firebaseConfig = {
-              apiKey: "AIzaSyDPjIArz_knqjAnVpk9nLib-89sgE6yMPo",
-  authDomain: "moryapos.firebaseapp.com",
-  databaseURL: "https://moryapos-default-rtdb.firebaseio.com",
-  projectId: "moryapos",
-  storageBucket: "moryapos.firebasestorage.app",
-  messagingSenderId: "736569569143",
-  appId: "1:736569569143:web:3905b38d0aaecae77d7b72",
-  measurementId: "G-0NZ4SF4GDP"
+            apiKey: "AIzaSyDPjIArz_knqjAnVpk9nLib-89sgE6yMPo",
+            authDomain: "moryapos.firebaseapp.com",
+            databaseURL: "https://moryapos-default-rtdb.firebaseio.com",
+            projectId: "moryapos",
+            storageBucket: "moryapos.firebasestorage.app",
+            messagingSenderId: "736569569143",
+            appId: "1:736569569143:web:3905b38d0aaecae77d7b72"
+        };
         // ---------------------------------------
 
-        const app = initializeApp(firebaseConfig);
-        const db = getDatabase(app);
-        window.db = db; window.dbRef = ref; window.dbSet = set; window.dbOnValue = onValue;
-        window.dispatchEvent(new Event('firebase-ready'));
+        try {
+            const app = initializeApp(firebaseConfig);
+            const db = getDatabase(app);
+            
+            // Expose to Window for React
+            window.db = db; 
+            window.dbRef = ref; 
+            window.dbSet = set; 
+            window.dbOnValue = onValue;
+            
+            console.log("Firebase Initialized Successfully");
+            window.dispatchEvent(new Event('firebase-ready'));
+        } catch (e) {
+            console.error("Firebase Error:", e);
+            alert("Database Connection Failed: " + e.message);
+        }
     </script>
 
     <script type="text/babel">
@@ -50,7 +63,7 @@
         const { jsPDF } = window.jspdf;
 
         // --- Config ---
-        const ADMIN_PIN = "028987"; // New Secure PIN
+        const ADMIN_PIN = "028987"; 
         const SHOP = { name: "Morya Matching Centre", prop: "Prof. Kapil Shinde", mobile: "7083522162", address: "Near R.K Chitale Madhyamik, Nehru Nagar, Mochi Wada, Dhule" };
         
         // --- Components ---
@@ -90,8 +103,8 @@
             const [cart, setCart] = useState([]);
             const [search, setSearch] = useState('');
             const [activeModal, setActiveModal] = useState(null); // checkout, edit, color, receipt, manage_stock
-            const [selItem, setSelItem] = useState(null); // Selected item for editing/adding
-            const [selColor, setSelColor] = useState(''); // Selected color input
+            const [selItem, setSelItem] = useState(null); 
+            const [selColor, setSelColor] = useState(''); 
             const colorInputRef = useRef(null);
             
             // Checkout Data
@@ -119,8 +132,12 @@
             // 2. Firebase Sync
             useEffect(() => {
                 if (!ready) return;
-                window.dbOnValue(window.dbRef(window.db, 'inventory'), (s) => setInv(s.val() ? Object.values(s.val()) : []));
-                window.dbOnValue(window.dbRef(window.db, 'transactions'), (s) => setTxs(s.val() ? Object.values(s.val()) : []));
+                try {
+                    window.dbOnValue(window.dbRef(window.db, 'inventory'), (s) => setInv(s.val() ? Object.values(s.val()) : []));
+                    window.dbOnValue(window.dbRef(window.db, 'transactions'), (s) => setTxs(s.val() ? Object.values(s.val()) : []));
+                } catch(err) {
+                    console.error("Sync Error", err);
+                }
             }, [ready]);
 
             // 3. Icons Refresh
@@ -161,10 +178,10 @@
                 setActiveModal(null);
             };
 
+            // FIX: Functional update for cart to allow multiple adds
             const addToCart = (item, qty = 1, color = null) => {
                 const cartId = item.id + (color ? `-${color}` : '');
                 
-                // FIX: Use 'prev' to get the latest cart state immediately
                 setCart(prev => {
                     const existing = prev.find(c => c.cartId === cartId);
                     if (existing) {
@@ -179,8 +196,6 @@
                         }];
                     }
                 });
-                setActiveModal(null); setSelColor('');
-            };
                 setActiveModal(null); setSelColor('');
             };
 
@@ -224,7 +239,7 @@
                 setActiveModal("receipt");
             };
 
-            // --- PDF Logic (Restored from your file) ---
+            // --- PDF Logic ---
             const generatePDF = (b) => {
                 const d = new jsPDF({ unit: 'mm', format: [80, 200] }); 
                 d.setFontSize(10); d.setFont("helvetica", "bold"); d.text("MORYA MATCHING", 40, 8, { align: 'center' });
@@ -252,7 +267,13 @@
 
             // --- Views ---
 
-            if (view === "loading") return <div className="h-screen flex items-center justify-center">Loading...</div>;
+            // Check if Firebase is ready before showing login (Prevents White Screen)
+            if (view === "loading") return (
+                <div className="h-screen flex flex-col items-center justify-center text-blue-600 gap-4">
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+                    <div>Starting Morya POS...</div>
+                </div>
+            );
 
             if (view === "auth") return (
                 <div className="h-screen bg-blue-600 flex items-center justify-center p-6">
@@ -264,6 +285,45 @@
                             onChange={(e) => { if(e.target.value.length === 10) handleLogin(e.target.value); }}
                         />
                     </Card>
+                </div>
+            );
+
+            if (view === "customer") return (
+                <div className="min-h-screen bg-gray-50 pb-20">
+                    <div className="bg-blue-600 p-6 text-white rounded-b-3xl shadow-lg mb-4 flex justify-between items-center">
+                        <div>
+                            <h1 className="text-2xl font-bold">Morya Matching</h1>
+                            <p className="opacity-80 text-sm">Welcome, Customer</p>
+                        </div>
+                        <button onClick={logout} className="text-white bg-blue-700 px-3 py-1 rounded-lg text-xs">Logout</button>
+                    </div>
+                    <div className="px-4">
+                        <h3 className="font-bold text-gray-800 mb-3">Your Purchase History</h3>
+                        {txs.filter(t => t.customerMobile === user.mobile).length === 0 ? (
+                            <div className="text-center py-10 text-gray-400">
+                                <Icon name="shopping-bag" className="mx-auto mb-2 opacity-50"/>
+                                <p>No orders found for {user.mobile}</p>
+                            </div>
+                        ) : (
+                            txs.filter(t => t.customerMobile === user.mobile).slice().reverse().map(t => (
+                                <Card key={t.id} className="mb-3">
+                                    <div className="flex justify-between font-bold border-b pb-2 mb-2">
+                                        <span>{new Date(t.date).toLocaleDateString()}</span>
+                                        <span className="text-green-600">₹{t.total}</span>
+                                    </div>
+                                    {t.items.map((i, idx) => (
+                                        <div key={idx} className="flex justify-between text-sm text-gray-600">
+                                            <span>{i.name} x{i.qty}</span>
+                                            <span>{i.price * i.qty}</span>
+                                        </div>
+                                    ))}
+                                    <Btn variant="secondary" className="w-full mt-3 py-2 text-xs" onClick={() => generatePDF(t)}>
+                                        <Icon name="download" size={14}/> Download Bill
+                                    </Btn>
+                                </Card>
+                            ))
+                        )}
+                    </div>
                 </div>
             );
 
@@ -357,7 +417,7 @@
                                 <span className="bg-gray-700 px-3 py-1 rounded-lg font-bold">{cart.reduce((s, i) => s + i.qty, 0)}</span>
                                 <span className="font-bold text-xl">₹{cart.reduce((s, i) => s + (i.price * i.qty), 0)}</span>
                             </div>
-                            <div className="flex items-center gap-2font-bold text-blue-300">Checkout <Icon name="arrow-right"/></div>
+                            <div className="flex items-center gap-2 font-bold text-blue-300">Checkout <Icon name="arrow-right"/></div>
                         </div>
                     )}
 
@@ -503,3 +563,4 @@
     </script>
 </body>
 </html>
+                            
