@@ -14,9 +14,8 @@ jobs:
       - name: Checkout Code
         uses: actions/checkout@v3
 
-      - name: Inject Secrets into App
+            - name: Inject Secrets into App
         run: |
-          # We use '|' as a separator instead of '/' to fix the URL error
           sed -i "s|__API_KEY__|${{ secrets.FIREBASE_API_KEY }}|g" index.html
           sed -i "s|__AUTH_DOMAIN__|${{ secrets.FIREBASE_AUTH_DOMAIN }}|g" index.html
           sed -i "s|__DB_URL__|${{ secrets.FIREBASE_DB_URL }}|g" index.html
@@ -24,6 +23,7 @@ jobs:
           sed -i "s|__STORAGE_BUCKET__|${{ secrets.FIREBASE_STORAGE_BUCKET }}|g" index.html
           sed -i "s|__SENDER_ID__|${{ secrets.FIREBASE_SENDER_ID }}|g" index.html
           sed -i "s|__APP_ID__|${{ secrets.FIREBASE_APP_ID }}|g" index.html
+          
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
